@@ -1633,3 +1633,332 @@ select:focus-visible {
     margin-left: 18px;
   }
 }
+/* =========================================================
+   MATCHES PAGE
+========================================================= */
+
+.matches-page {
+  width: 100%;
+  max-width: 1100px;
+  margin: 0 auto;
+  padding-bottom: 60px;
+}
+
+/* =========================================================
+   REQUIREMENT SUMMARY
+========================================================= */
+
+.requirement-summary {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 14px;
+
+  margin-bottom: 32px;
+  padding: 20px;
+
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+
+  box-shadow: var(--shadow-sm);
+}
+
+.requirement-summary > div {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+
+  padding: 5px 18px;
+  border-right: 1px solid var(--border);
+}
+
+.requirement-summary > div:last-child {
+  border-right: none;
+}
+
+.requirement-summary span {
+  color: var(--text-light);
+
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.7px;
+  text-transform: uppercase;
+}
+
+.requirement-summary strong {
+  color: var(--text-dark);
+
+  font-size: 15px;
+  font-weight: 750;
+}
+
+/* =========================================================
+   MATCHING PREFERENCE
+========================================================= */
+
+.matching-mode-section {
+  margin-bottom: 34px;
+  padding: 24px;
+
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+
+  box-shadow: var(--shadow-sm);
+}
+
+.matching-mode-header {
+  margin-bottom: 20px;
+}
+
+.matching-mode-header h2 {
+  color: var(--text-dark);
+
+  font-size: 18px;
+  font-weight: 750;
+}
+
+.matching-mode-header p {
+  margin-top: 6px;
+
+  color: var(--text-muted);
+
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.matching-mode-options {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 11px;
+}
+
+.mode-option {
+  min-height: 82px;
+
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+
+  padding: 15px;
+
+  background: var(--surface-soft);
+
+  border: 1px solid var(--border);
+  border-radius: 11px;
+
+  color: var(--text);
+
+  text-align: left;
+
+  transition:
+    background 0.2s ease,
+    border-color 0.2s ease,
+    transform 0.2s ease,
+    box-shadow 0.2s ease;
+}
+
+.mode-option strong {
+  color: var(--text-dark);
+
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.mode-option span {
+  margin-top: 5px;
+
+  color: var(--text-muted);
+
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.mode-option:hover {
+  background: var(--surface-green);
+  border-color: var(--border-dark);
+
+  transform: translateY(-2px);
+
+  box-shadow: var(--shadow-sm);
+}
+
+.mode-option.active {
+  background: var(--surface-green);
+  border-color: var(--primary);
+
+  box-shadow:
+    inset 0 0 0 1px var(--primary),
+    var(--shadow-sm);
+}
+
+.mode-option.active strong {
+  color: var(--primary);
+}
+
+.mode-option.active span {
+  color: var(--primary);
+}
+
+/* =========================================================
+   MATCH RESULTS HEADER
+========================================================= */
+
+.matches-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+
+  border-bottom: 1px solid var(--border);
+}
+
+.matches-header h2 {
+  color: var(--text-dark);
+
+  font-size: 20px;
+  font-weight: 750;
+}
+
+.matches-header p {
+  margin-top: 5px;
+
+  color: var(--text-muted);
+
+  font-size: 12px;
+}
+
+/* =========================================================
+   MATCH LIST
+========================================================= */
+
+.matches-list {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* =========================================================
+   MATCH CARD
+========================================================= */
+
+.match-card {
+  position: relative;
+
+  padding: 24px;
+
+  background: var(--surface);
+
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+
+  box-shadow: var(--shadow-sm);
+
+  transition:
+    transform 0.2s ease,
+    border-color 0.2s ease,
+    box-shadow 0.2s ease;
+}
+
+.match-card:hover {
+  transform: translateY(-2px);
+
+  border-color: var(--border-dark);
+
+  box-shadow: var(--shadow);
+}
+
+.match-score {
+  color: var(--primary);
+
+  font-size: 20px;
+  font-weight: 800;
+}
+
+/* =========================================================
+   MATCH CARD INTERNAL SECTIONS
+   These support the content inside MatchCard.tsx
+========================================================= */
+
+.match-card h3 {
+  color: var(--text-dark);
+  font-size: 17px;
+  font-weight: 750;
+}
+
+.match-card p {
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.match-card strong {
+  color: var(--text-dark);
+}
+
+.match-card button {
+  transition:
+    background 0.2s ease,
+    border-color 0.2s ease,
+    transform 0.2s ease,
+    box-shadow 0.2s ease;
+}
+
+.match-card button:hover {
+  transform: translateY(-1px);
+}
+
+/* =========================================================
+   RESPONSIVE — MATCHES
+========================================================= */
+
+@media (max-width: 900px) {
+  .matching-mode-options {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .requirement-summary {
+    grid-template-columns: 1fr;
+  }
+
+  .requirement-summary > div {
+    padding: 10px 0;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .requirement-summary > div:last-child {
+    border-bottom: none;
+  }
+}
+
+@media (max-width: 600px) {
+  .matches-page {
+    padding-bottom: 35px;
+  }
+
+  .matching-mode-section {
+    padding: 18px;
+  }
+
+  .matching-mode-options {
+    grid-template-columns: 1fr;
+  }
+
+  .mode-option {
+    min-height: 68px;
+  }
+
+  .match-card {
+    padding: 18px;
+  }
+
+  .matches-header {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 4px;
+  }
+}

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 
 type Transaction = {
@@ -15,6 +16,7 @@ type Transaction = {
 };
 
 function Dashboard() {
+  const navigate = useNavigate();
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
@@ -37,24 +39,42 @@ function Dashboard() {
         setMessage("Please log in to view your dashboard.");
         return;
       }
+      // Get user's role
+      const { data: profile, error: profileError } = await supabase
+        .from("profiles")
+        .select("role")
+        .eq("id", user.id)
+        .single();
+
+      if (profileError) {
+        console.error("Profile error:", profileError);
+        setMessage(`Could not load your profile: ${profileError.message}`);
+        return;
+      }
+
+      // Logistics users should use the logistics dashboard
+      if (profile.role === "logistics") {
+        navigate("/logistics", { replace: true });
+        return;
+      }
 
       const { data, error } = await supabase
         .from("transactions")
         .select(
           `
-          id,
-          buyer_id,
-          seller_id,
-          match_score,
-          status,
-          estimated_co2_saved_kg,
-          estimated_transport_emissions_kg,
-          estimated_transport_cost,
-          listing_id,
-          requirement_id
-        `,
+    id,
+    buyer_id,
+    seller_id,
+    match_score,
+    status,
+    estimated_co2_saved_kg,
+    estimated_transport_emissions_kg,
+    estimated_transport_cost,
+    listing_id,
+    requirement_id
+  `,
         )
-        .eq("buyer_id", user.id)
+        .or(`buyer_id.eq.${user.id},seller_id.eq.${user.id}`)
         .order("created_at", { ascending: false });
 
       if (error) {

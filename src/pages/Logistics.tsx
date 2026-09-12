@@ -1,5 +1,4 @@
 import { useEffect, useState } from "react";
-import { Handshake } from "lucide-react";
 import { supabase } from "../lib/supabase";
 
 type LogisticsTransaction = {
@@ -47,6 +46,22 @@ function Logistics() {
 
       if (userError || !user) {
         setMessage("Please log in to view logistics pickups.");
+        return;
+      }
+      const { data: profile, error: profileError } = await supabase
+        .from("profiles")
+        .select("role")
+        .eq("id", user.id)
+        .single();
+
+      if (profileError) {
+        console.error("Profile error:", profileError);
+        setMessage(`Could not verify your role: ${profileError.message}`);
+        return;
+      }
+
+      if (profile?.role !== "logistics") {
+        setMessage("This page is only available to logistics users.");
         return;
       }
 

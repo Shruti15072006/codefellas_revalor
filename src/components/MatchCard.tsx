@@ -10,87 +10,125 @@ function MatchCard({ match, onClaim, claiming = false }: MatchCardProps) {
   const isRecycling = match.pathway === "recycling";
 
   return (
-    <div className="match-card">
-      {/* Header */}
-      <div className="match-card-header">
-        <div>
-          <p className="listing-material">{match.materialType}</p>
+    <article className="match-card">
+      {/* =====================================================
+          TOP SECTION
+      ===================================================== */}
+      <div className="match-card-top">
+        <div className="match-material">
+          <div className="match-material-icon">
+            {match.materialType.charAt(0).toUpperCase()}
+          </div>
 
-          <p className="match-quantity">
-            {match.quantity} {match.unit}
-          </p>
+          <div>
+            <h3>{match.materialType}</h3>
+
+            <p>
+              {match.quantity} {match.unit} available
+            </p>
+          </div>
         </div>
 
-        <div className="match-score">
+        <div className="match-score-box">
           <span>Match Score</span>
+
           <strong>{match.match_score}%</strong>
         </div>
       </div>
 
-      {/* Details */}
+      {/* =====================================================
+          MATCH DETAILS
+      ===================================================== */}
       <div className="match-details">
-        <div>
-          <span>Grade</span>
+        <div className="match-detail">
+          <span>GRADE</span>
           <strong>Grade {match.grade}</strong>
         </div>
 
-        <div>
-          <span>Distance</span>
+        <div className="match-detail">
+          <span>DISTANCE</span>
           <strong>{match.distance_km} km</strong>
         </div>
 
-        <div>
-          <span>CO₂ Saved</span>
+        <div className="match-detail">
+          <span>CO₂ SAVED</span>
           <strong>{match.carbon_saved_kg} kg</strong>
         </div>
 
-        <div>
-          <span>Price</span>
-
+        <div className="match-detail">
+          <span>PRICE</span>
           <strong>{match.price === 0 ? "Free" : `₹${match.price}/kg`}</strong>
         </div>
       </div>
 
-      {/* Why this match */}
+      {/* =====================================================
+          WHY THIS MATCH
+      ===================================================== */}
       <div className="match-reasons">
-        <p>Why this match?</p>
+        <div className="match-reasons-header">
+          <h4>Why this match?</h4>
+
+          <span>{match.reasons.length} factors</span>
+        </div>
 
         <ul>
           {match.reasons.map((reason, index) => (
-            <li key={index}>{reason}</li>
+            <li key={index}>
+              <span className="reason-check">✓</span>
+
+              <span>{reason}</span>
+            </li>
           ))}
         </ul>
       </div>
 
-      {/* Pathway */}
-      <div className="pathway-message">
-        {isRecycling ? (
-          <>
-            <strong>Not suitable for direct reuse</strong>
+      {/* =====================================================
+          PATHWAY
+      ===================================================== */}
+      <div
+        className={`pathway-message ${
+          isRecycling ? "recycling-pathway" : "direct-reuse-pathway"
+        }`}
+      >
+        <div className="pathway-indicator">{isRecycling ? "R" : "D"}</div>
 
-            <p>Recommended pathway: recycling</p>
-          </>
-        ) : (
-          <>
-            <strong>Suitable for direct reuse</strong>
+        <div className="pathway-content">
+          <strong>
+            {isRecycling
+              ? "Not suitable for direct reuse"
+              : "Suitable for direct reuse"}
+          </strong>
 
-            <p>This material can be reused directly.</p>
-          </>
-        )}
+          <p>
+            {isRecycling
+              ? "Recommended pathway: recycling"
+              : "This material can be reused directly."}
+          </p>
+        </div>
       </div>
 
-      {/* Claim button */}
+      {/* =====================================================
+          ACTION
+      ===================================================== */}
       {!isRecycling && (
-        <button
-          type="button"
-          className="primary-button"
-          disabled={claiming}
-          onClick={() => onClaim(match)}
-        >
-          {claiming ? "Claiming..." : "Claim Match"}
-        </button>
+        <div className="match-card-action">
+          <button
+            type="button"
+            className="primary-button match-claim-button"
+            disabled={claiming}
+            onClick={() => onClaim(match)}
+          >
+            {claiming ? "Claiming..." : "Claim Match"}
+          </button>
+        </div>
       )}
-    </div>
+
+      {isRecycling && (
+        <div className="match-card-action">
+          <span className="recycling-note">Recycling pathway recommended</span>
+        </div>
+      )}
+    </article>
   );
 }
 

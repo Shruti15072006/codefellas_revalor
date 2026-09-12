@@ -1,5 +1,7 @@
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabase";
+
 
 const cityCoordinates = {
   Ahmedabad: {
@@ -21,6 +23,8 @@ const cityCoordinates = {
 };
 
 function CreateRequirement() {
+  const navigate = useNavigate();
+
   const [materialType, setMaterialType] = useState("cardboard");
   const [quantityNeeded, setQuantityNeeded] = useState("");
   const [minGrade, setMinGrade] = useState("B");
@@ -37,6 +41,10 @@ function CreateRequirement() {
 
     setMessage("");
 
+    // ---------------------------------------------
+    // VALIDATION
+    // ---------------------------------------------
+
     if (!quantityNeeded || Number(quantityNeeded) <= 0) {
       setMessage("Please enter a valid quantity.");
       return;
@@ -47,20 +55,34 @@ function CreateRequirement() {
       return;
     }
 
+    if (maxBudget && Number(maxBudget) < 0) {
+      setMessage("Please enter a valid maximum budget.");
+      return;
+    }
+
     const coordinates =
       cityCoordinates[location as keyof typeof cityCoordinates];
+
+    if (!coordinates) {
+      setMessage("Please select a valid location.");
+      return;
+    }
 
     setLoading(true);
 
     try {
-      // Get logged-in user
+      // ---------------------------------------------
+      // 1. GET LOGGED-IN USER
+      // ---------------------------------------------
+
       const {
         data: { user },
         error: userError,
       } = await supabase.auth.getUser();
 
       if (userError) {
-        console.error(userError);
+        console.error("User error:", userError);
+
         setMessage("Could not get user information.");
         return;
       }
@@ -70,7 +92,10 @@ function CreateRequirement() {
         return;
       }
 
-      // Data matching Vedanshi's requirements table
+      // ---------------------------------------------
+      // 2. CREATE REQUIREMENT
+      // ---------------------------------------------
+
       const requirementData = {
         buyer_id: user.id,
         material_type: materialType,
@@ -83,27 +108,44 @@ function CreateRequirement() {
         needed_by: neededBy || null,
       };
 
-      console.log("Sending requirement:", requirementData);
+      console.log("Creating requirement:", requirementData);
 
-      const { error } = await supabase
-        .from("requirements")
-        .insert(requirementData);
+      const { data: createdRequirement, error: requirementError } =
+        await supabase
+          .from("requirements")
+          .insert(requirementData)
+          .select("id")
+          .single();
 
-      if (error) {
-        console.error("Insert error:", error);
-        setMessage(`Failed to publish requirement: ${error.message}`);
+      // ---------------------------------------------
+      // 3. CHECK INSERT ERROR
+      // ---------------------------------------------
+
+      if (requirementError) {
+        console.error("Requirement insert error:", requirementError);
+
+        setMessage(
+          `Failed to publish requirement: ${requirementError.message}`,
+        );
+
         return;
       }
 
-      setMessage("Requirement published successfully!");
+      if (!createdRequirement?.id) {
+        setMessage("Requirement was created, but its ID could not be found.");
+        return;
+      }
 
-      // Clear form
-      setQuantityNeeded("");
-      setMaxBudget("");
-      setMaxDistance("50");
-      setNeededBy("");
+      console.log("Requirement created successfully:", createdRequirement.id);
+
+      // ---------------------------------------------
+      // 4. GO TO MATCHES WITH NEW REQUIREMENT ID
+      // ---------------------------------------------
+
+      navigate(`/matches/${createdRequirement.id}`);
     } catch (error) {
-      console.error(error);
+      console.error("Create requirement error:", error);
+
       setMessage("Something went wrong while publishing the requirement.");
     } finally {
       setLoading(false);
@@ -112,6 +154,10 @@ function CreateRequirement() {
 
   return (
     <div className="create-page">
+      {/* ---------------------------------------------
+          PAGE HEADER
+      --------------------------------------------- */}
+
       <div className="page-header">
         <p className="eyebrow">MATERIAL MARKETPLACE</p>
 
@@ -122,15 +168,20 @@ function CreateRequirement() {
         </p>
       </div>
 
+      {/* ---------------------------------------------
+          FORM
+      --------------------------------------------- */}
+
       <form className="listing-form" onSubmit={handleSubmit}>
-        {/* Material */}
+        {/* MATERIAL TYPE */}
 
         <div className="form-group">
-          <label>Material Type</label>
+          <label htmlFor="material-type">Material Type</label>
 
           <select
+            id="material-type"
             value={materialType}
-            onChange={(e) => setMaterialType(e.target.value)}
+            onChange={(event) => setMaterialType(event.target.value)}
           >
             <option value="cardboard">Cardboard</option>
             <option value="plastic">Plastic</option>
@@ -138,21 +189,22 @@ function CreateRequirement() {
           </select>
         </div>
 
-        {/* Quantity */}
+        {/* QUANTITY */}
 
         <div className="form-group">
-          <label>Quantity Needed</label>
+          <label htmlFor="quantity-needed">Quantity Needed</label>
 
           <input
+            id="quantity-needed"
             type="number"
             min="1"
             placeholder="e.g. 400"
             value={quantityNeeded}
-            onChange={(e) => setQuantityNeeded(e.target.value)}
+            onChange={(event) => setQuantityNeeded(event.target.value)}
           />
         </div>
 
-        {/* Grade */}
+        {/* MINIMUM GRADE */}
 
         <div className="form-group">
           <label>Minimum Grade</label>
@@ -173,38 +225,40 @@ function CreateRequirement() {
           </div>
         </div>
 
-        {/* Budget */}
+        {/* MAXIMUM BUDGET */}
 
         <div className="form-group">
-          <label>Maximum Budget</label>
+          <label htmlFor="max-budget">Maximum Budget</label>
 
           <div className="input-with-prefix">
             <span>₹</span>
 
             <input
+              id="max-budget"
               type="number"
               min="0"
               placeholder="e.g. 10"
               value={maxBudget}
-              onChange={(e) => setMaxBudget(e.target.value)}
+              onChange={(event) => setMaxBudget(event.target.value)}
             />
           </div>
 
           <small>Leave empty if there is no fixed budget.</small>
         </div>
 
-        {/* Maximum Distance */}
+        {/* MAXIMUM DISTANCE */}
 
         <div className="form-group">
-          <label>Maximum Distance</label>
+          <label htmlFor="max-distance">Maximum Distance</label>
 
           <div className="input-with-prefix">
             <input
+              id="max-distance"
               type="number"
               min="1"
               placeholder="e.g. 50"
               value={maxDistance}
-              onChange={(e) => setMaxDistance(e.target.value)}
+              onChange={(event) => setMaxDistance(event.target.value)}
             />
 
             <span>km</span>
@@ -215,14 +269,15 @@ function CreateRequirement() {
           </small>
         </div>
 
-        {/* Location */}
+        {/* LOCATION */}
 
         <div className="form-group">
-          <label>Location</label>
+          <label htmlFor="location">Location</label>
 
           <select
+            id="location"
             value={location}
-            onChange={(e) => setLocation(e.target.value)}
+            onChange={(event) => setLocation(event.target.value)}
           >
             <option value="Ahmedabad">Ahmedabad</option>
             <option value="Vadodara">Vadodara</option>
@@ -233,25 +288,31 @@ function CreateRequirement() {
           <small>Used to calculate distance to available materials.</small>
         </div>
 
-        {/* Needed By */}
+        {/* NEEDED BY */}
 
         <div className="form-group">
-          <label>Needed By</label>
+          <label htmlFor="needed-by">Needed By</label>
 
           <input
+            id="needed-by"
             type="date"
             value={neededBy}
-            onChange={(e) => setNeededBy(e.target.value)}
+            onChange={(event) => setNeededBy(event.target.value)}
           />
         </div>
 
+        {/* MESSAGE */}
+
         {message && <div className="form-message">{message}</div>}
+
+        {/* ACTIONS */}
 
         <div className="form-actions">
           <button
             type="button"
             className="secondary-button"
             onClick={() => window.history.back()}
+            disabled={loading}
           >
             Cancel
           </button>
