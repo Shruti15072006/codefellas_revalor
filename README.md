@@ -1,4 +1,4 @@
-# ReCrate
+# ReValor
 
 **B2B circular packaging exchange platform** — built for **HackOut'26** (theme: *Circular Carbon Ecosystem*).
 
