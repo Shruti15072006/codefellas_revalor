@@ -1,1164 +1,852 @@
+
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-// ======================================================
-// CORS
-// ======================================================
+const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
+const supabaseServiceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+
+const supabase = createClient(supabaseUrl, supabaseAnonKey);
+const adminSupabase = createClient(supabaseUrl, supabaseServiceRoleKey);
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers":
     "authorization, x-client-info, apikey, content-type",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
+  "Content-Type": "application/json",
 };
 
-// ======================================================
-// TYPES
-// ======================================================
-
-type Grade = "A" | "B" | "C";
+type MatchingMode =
+  | "balanced"
+  | "lowest_cost"
+  | "lowest_carbon"
+  | "fastest_delivery";
 
 type Requirement = {
   id: string;
-  buyer_id: string;
+  user_id: string;
   material_type: string;
-  quantity_needed: number;
-  min_grade: Grade;
-  max_budget: number | null;
-
-  // NEW:
-  max_distance_km: number | null;
-
-  location_lat: number;
-  location_lng: number;
-  needed_by: string | null;
-  status: "open" | "matched" | "closed";
+  quantity: number;
+  quality_grade?: string | null;
+  max_budget?: number | null;
+  needed_by?: string | null;
+  max_distance_km?: number | null;
 };
 
 type Listing = {
   id: string;
-  seller_id: string;
+  user_id?: string | null;
   material_type: string;
   quantity: number;
-  unit: string;
-  grade: Grade;
-
-  // Per-unit price, e.g. ₹8/kg
-  price: number | null;
-
-  location_lat: number;
-  location_lng: number;
-  available_from: string | null;
-  available_until: string | null;
-  status: "available" | "matched" | "completed";
+  quality_grade?: string | null;
+  price_per_unit?: number | null;
+  available_from?: string | null;
+  latitude?: number | null;
+  longitude?: number | null;
+  location_lat?: number | null;
+  location_lng?: number | null;
+  carbon_saved_kg?: number | null;
+  estimated_delivery_days?: number | null;
 };
 
-type MatchResult = {
-  listing_id: string;
-
-  match_score: number;
-
-  distance_km: number;
-
-  carbon_saved_kg: number;
-
-  pathway: "direct_reuse" | "recycling";
-
+type Candidate = {
+  listing: Listing;
+  distance_km: number | null;
+  estimated_delivery_days: number | null;
+  price_score: number | null;
+  quantity_score: number;
+  quality_score: number;
+  distance_score: number | null;
+  carbon_score: number | null;
+  delivery_score: number | null;
+  material_score: number;
+  raw_price: number | null;
+  raw_carbon_saved: number | null;
+  raw_delivery_days: number | null;
+  pathway: string;
   reasons: string[];
-
-  score_breakdown: {
-    material: number;
-    quantity: number;
-    quality: number;
-    distance: number;
-    price: number | null;
-    carbon: number;
-  };
 };
 
-// ======================================================
-// HAVERSINE DISTANCE
-// ======================================================
+const VALID_MODES: MatchingMode[] = [
+  "balanced",
+  "lowest_cost",
+  "lowest_carbon",
+  "fastest_delivery",
+];
 
-function haversineDistance(
-  lat1: number,
-  lon1: number,
-  lat2: number,
-  lon2: number,
-): number {
+function jsonResponse(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: corsHeaders,
+  });
+}
+
+function clamp(value: number, min = 0, max = 1): number {
+  return Math.max(min, Math.min(max, value));
+}
+
+function normalizeMinMax(
+  value: number | null,
+  min: number,
+  max: number,
+  higherIsBetter = true,
+): number | null {
+  if (value === null || !Number.isFinite(value)) {
+    return null;
+  }
+
+  if (min === max) {
+    return 1;
+  }
+
+  const normalized = (value - min) / (max - min);
+
+  return higherIsBetter
+    ? clamp(normalized)
+    : clamp(1 - normalized);
+}
+
+function normalizeText(value: unknown): string {
+  return String(value ?? "").trim().toLowerCase();
+}
+
+function isQualityCompatible(
+  requiredQuality: string | null | undefined,
+  availableQuality: string | null | undefined,
+): boolean {
+  if (!requiredQuality || !availableQuality) {
+    return true;
+  }
+
+  const required = normalizeText(requiredQuality);
+  const available = normalizeText(availableQuality);
+
+  if (required === available) {
+    return true;
+  }
+
+  const qualityRank: Record<string, number> = {
+    low: 1,
+    basic: 1,
+    standard: 2,
+    medium: 2,
+    good: 3,
+    high: 4,
+    premium: 5,
+    excellent: 5,
+  };
+
+  const requiredRank = qualityRank[required];
+  const availableRank = qualityRank[available];
+
+  if (requiredRank === undefined || availableRank === undefined) {
+    return false;
+  }
+
+  return availableRank >= requiredRank;
+}
+
+function calculateDistanceKm(
+  requirement: Requirement,
+  listing: Listing,
+): number | null {
+  const requirementLatitude = (requirement as any).latitude;
+  const requirementLongitude = (requirement as any).longitude;
+
+  const listingLatitude =
+    listing.latitude ?? listing.location_lat ?? null;
+
+  const listingLongitude =
+    listing.longitude ?? listing.location_lng ?? null;
+
+  if (
+    requirementLatitude === null ||
+    requirementLatitude === undefined ||
+    requirementLongitude === null ||
+    requirementLongitude === undefined ||
+    listingLatitude === null ||
+    listingLongitude === null ||
+    listingLatitude === undefined ||
+    listingLongitude === undefined
+  ) {
+    return null;
+  }
+
   const earthRadiusKm = 6371;
 
-  const dLat = ((lat2 - lat1) * Math.PI) / 180;
-  const dLon = ((lon2 - lon1) * Math.PI) / 180;
+  const latitudeDifference =
+    ((listingLatitude - requirementLatitude) * Math.PI) / 180;
+
+  const longitudeDifference =
+    ((listingLongitude - requirementLongitude) * Math.PI) / 180;
+
+  const latitude1 = (requirementLatitude * Math.PI) / 180;
+  const latitude2 = (listingLatitude * Math.PI) / 180;
 
   const a =
-    Math.sin(dLat / 2) ** 2 +
-    Math.cos((lat1 * Math.PI) / 180) *
-      Math.cos((lat2 * Math.PI) / 180) *
-      Math.sin(dLon / 2) ** 2;
+    Math.sin(latitudeDifference / 2) ** 2 +
+    Math.cos(latitude1) *
+      Math.cos(latitude2) *
+      Math.sin(longitudeDifference / 2) ** 2;
 
-  const c =
-    2 * Math.atan2(
-      Math.sqrt(a),
-      Math.sqrt(1 - a),
-    );
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 
   return earthRadiusKm * c;
 }
 
-// ======================================================
-// GRADE RANKING
-// A = 3
-// B = 2
-// C = 1
-// ======================================================
-
-function gradeRank(grade: Grade): number {
-  switch (grade) {
-    case "A":
-      return 3;
-
-    case "B":
-      return 2;
-
-    case "C":
-      return 1;
-
-    default:
-      return 0;
-  }
-}
-
-// ======================================================
-// GRADE COMPATIBILITY
-//
-// Requirement A:
-//   Listing A -> yes
-//   Listing B -> no
-//   Listing C -> no
-//
-// Requirement B:
-//   Listing A -> yes
-//   Listing B -> yes
-//   Listing C -> no
-//
-// Requirement C:
-//   Listing A -> yes
-//   Listing B -> yes
-//   Listing C -> yes
-// ======================================================
-
-function gradeCompatible(
-  listingGrade: Grade,
-  minimumGrade: Grade,
-): boolean {
-  return (
-    gradeRank(listingGrade) >=
-    gradeRank(minimumGrade)
-  );
-}
-
-// ======================================================
-// CIRCULAR PATHWAY
-//
-// A/B -> Direct Reuse
-// C   -> Recycling
-// ======================================================
-
-function getPathway(
-  grade: Grade,
-): "direct_reuse" | "recycling" {
-  if (grade === "C") {
-    return "recycling";
-  }
-
-  return "direct_reuse";
-}
-
-// ======================================================
-// CARBON ESTIMATE
-//
-// ReValor design:
-// Transport CO2e = Mass(t)
-//                 × Distance(km)
-//                 × Vehicle Emission Factor
-//
-// This is an INDICATIVE MVP estimate.
-// It is NOT certified carbon accounting.
-// ======================================================
-
-function calculateCarbonSaved(
-  quantityKg: number,
-  distanceKm: number,
-  grade: Grade,
-): number {
-  // Simplified MVP assumption.
-  const vehicleEmissionFactor =
-    0.1; // kg CO2e / tonne-km
-
-  const massTonnes =
-    quantityKg / 1000;
-
-  const transportEmissions =
-    massTonnes *
-    distanceKm *
-    vehicleEmissionFactor;
-
-  // Simplified avoided-material impact.
-  let avoidedImpactPerKg = 0;
-
-  if (grade === "A") {
-    avoidedImpactPerKg = 1.5;
-  } else if (grade === "B") {
-    avoidedImpactPerKg = 1.2;
-  } else {
-    avoidedImpactPerKg = 0.5;
-  }
-
-  const avoidedMaterialImpact =
-    quantityKg *
-    avoidedImpactPerKg;
-
-  const carbonSaved =
-    avoidedMaterialImpact -
-    transportEmissions;
-
-  return Math.max(
-    0,
-    carbonSaved,
-  );
-}
-
-// ======================================================
-// DATE COMPATIBILITY
-// ======================================================
-
-function dateCompatible(
-  requirement: Requirement,
-  listing: Listing,
-): boolean {
-  // No deadline = no date restriction
-  if (!requirement.needed_by) {
-    return true;
-  }
-
-  const neededBy =
-    new Date(requirement.needed_by);
-
-  // If listing becomes available after
-  // buyer's deadline -> reject
-  if (listing.available_from) {
-    const availableFrom =
-      new Date(listing.available_from);
-
-    if (availableFrom > neededBy) {
-      return false;
-    }
-  }
-
-  return true;
-}
-
-// ======================================================
-// QUANTITY SCORE
-//
-// Formula:
-//
-// 1 - |offered - needed| / needed
-//
-// Clamped between 0 and 1.
-//
-// Example:
-// Needed = 400 kg
-// Offered = 300 kg
-//
-// 1 - |300 - 400| / 400
-// = 1 - 100 / 400
-// = 0.75
-// ======================================================
-
 function calculateQuantityScore(
-  needed: number,
-  offered: number,
+  requiredQuantity: number,
+  availableQuantity: number,
 ): number {
-  if (needed <= 0) {
+  if (requiredQuantity <= 0 || availableQuantity <= 0) {
     return 0;
   }
 
-  const difference =
-    Math.abs(
-      offered - needed,
-    );
+  if (availableQuantity < requiredQuantity) {
+    return clamp(availableQuantity / requiredQuantity);
+  }
 
-  const score =
-    1 -
-    difference / needed;
+  const excessRatio =
+    (availableQuantity - requiredQuantity) / requiredQuantity;
 
-  return Math.max(
-    0,
-    Math.min(1, score),
-  );
+  return clamp(1 - excessRatio * 0.25);
 }
 
-// ======================================================
-// MAIN MATCH SCORE
-//
-// Factors:
-// 1. Material
-// 2. Quantity
-// 3. Quality
-// 4. Distance
-// 5. Price
-// 6. Carbon
-//
-// All normalised 0–1.
-// ======================================================
+function calculateQualityScore(
+  requiredQuality: string | null | undefined,
+  availableQuality: string | null | undefined,
+): number {
+  if (!requiredQuality || !availableQuality) {
+    return 0.5;
+  }
 
-function calculateMatchScore(
-  requirement: Requirement,
+  if (normalizeText(requiredQuality) === normalizeText(availableQuality)) {
+    return 1;
+  }
+
+  return isQualityCompatible(requiredQuality, availableQuality) ? 0.8 : 0;
+}
+
+function calculatePriceScore(
+  pricePerUnit: number | null | undefined,
+  maxBudget: number | null | undefined,
+): number | null {
+  if (
+    pricePerUnit === null ||
+    pricePerUnit === undefined ||
+    maxBudget === null ||
+    maxBudget === undefined ||
+    pricePerUnit < 0 ||
+    maxBudget <= 0
+  ) {
+    return null;
+  }
+
+  if (pricePerUnit > maxBudget) {
+    return 0;
+  }
+
+  if (pricePerUnit === 0) {
+    return 1;
+  }
+
+  return clamp(1 - pricePerUnit / maxBudget);
+}
+
+function calculateDeliveryDays(
   listing: Listing,
-  distanceKm: number,
-) {
-  // --------------------------------------------------
-  // MATERIAL
-  // --------------------------------------------------
-
-  const materialScore =
-    requirement.material_type
-      .trim()
-      .toLowerCase() ===
-    listing.material_type
-      .trim()
-      .toLowerCase()
-      ? 1
-      : 0;
-
-  // --------------------------------------------------
-  // QUANTITY
-  // --------------------------------------------------
-
-  const quantityScore =
-    calculateQuantityScore(
-      requirement.quantity_needed,
-      listing.quantity,
-    );
-
-  // --------------------------------------------------
-  // QUALITY
-  // --------------------------------------------------
-
-  const qualityScore =
-    gradeCompatible(
-      listing.grade,
-      requirement.min_grade,
-    )
-      ? 1
-      : 0;
-
-  // --------------------------------------------------
-  // DISTANCE
-  //
-  // Shorter distance = higher score.
-  // max_distance_km is used as the normalisation
-  // reference when available.
-  // --------------------------------------------------
-
-  let distanceScore = 0;
-
+  distanceKm: number | null,
+): number | null {
   if (
-    requirement.max_distance_km !== null &&
-    requirement.max_distance_km > 0
+    listing.estimated_delivery_days !== null &&
+    listing.estimated_delivery_days !== undefined &&
+    Number.isFinite(listing.estimated_delivery_days)
   ) {
-    distanceScore = Math.max(
-      0,
-      Math.min(
-        1,
-        1 -
-          distanceKm /
-            requirement.max_distance_km,
-      ),
-    );
-  } else {
-    distanceScore =
-      1 /
-      (1 + distanceKm / 100);
+    return Math.max(0, Math.ceil(listing.estimated_delivery_days));
   }
 
-  // --------------------------------------------------
-  // PRICE
-  //
-  // price and max_budget are PER-UNIT.
-  //
-  // Example:
-  // Listing = ₹8/kg
-  // Budget  = ₹15/kg
-  // --------------------------------------------------
+  let waitingDays = 0;
 
-  let priceScore:
-    | number
-    | null = null;
+  if (listing.available_from) {
+    const availableDate = new Date(listing.available_from);
 
-  if (
-    listing.price !== null &&
-    requirement.max_budget !== null &&
-    requirement.max_budget > 0
-  ) {
-    priceScore = Math.max(
-      0,
-      Math.min(
-        1,
-        1 -
-          listing.price /
-            requirement.max_budget,
-      ),
-    );
+    if (!Number.isNaN(availableDate.getTime())) {
+      const now = new Date();
+      const differenceMs = availableDate.getTime() - now.getTime();
+
+      waitingDays = Math.max(
+        0,
+        Math.ceil(differenceMs / (1000 * 60 * 60 * 24)),
+      );
+    }
   }
 
-  // --------------------------------------------------
-  // CARBON
-  // --------------------------------------------------
-
-  const quantityForCarbon =
-    Math.min(
-      listing.quantity,
-      requirement.quantity_needed,
-    );
-
-  const carbonSaved =
-    calculateCarbonSaved(
-      quantityForCarbon,
-      distanceKm,
-      listing.grade,
-    );
-
-  // Normalised carbon score.
-  const carbonScore =
-    Math.min(
-      1,
-      carbonSaved / 1000,
-    );
-
-  // --------------------------------------------------
-  // WEIGHTS
-  // --------------------------------------------------
-
-  const weights = {
-    material: 0.30,
-    quantity: 0.15,
-    quality: 0.15,
-    distance: 0.15,
-    price: 0.10,
-    carbon: 0.15,
-  };
-
-  // --------------------------------------------------
-  // Missing price:
-  //
-  // Price is NOT treated as ₹0.
-  // Its weight is removed and the remaining
-  // weights are renormalised.
-  // --------------------------------------------------
-
-  let totalWeight =
-    weights.material +
-    weights.quantity +
-    weights.quality +
-    weights.distance +
-    weights.carbon;
-
-  let weightedScore =
-    materialScore *
-      weights.material +
-    quantityScore *
-      weights.quantity +
-    qualityScore *
-      weights.quality +
-    distanceScore *
-      weights.distance +
-    carbonScore *
-      weights.carbon;
-
-  if (priceScore !== null) {
-    totalWeight +=
-      weights.price;
-
-    weightedScore +=
-      priceScore *
-      weights.price;
+  if (distanceKm === null) {
+    return listing.available_from ? waitingDays : null;
   }
 
-  const score01 =
-    weightedScore /
-    totalWeight;
+  const transportDays = Math.max(1, Math.ceil(distanceKm / 150));
 
-  const matchScore =
-    Math.round(
-      score01 * 100,
-    );
+  return waitingDays + transportDays;
+}
+
+function calculateDeliveryScore(
+  deliveryDays: number | null,
+  neededBy: string | null | undefined,
+): number | null {
+  if (deliveryDays === null) {
+    return null;
+  }
+
+  if (!neededBy) {
+    return clamp(1 - deliveryDays / 30);
+  }
+
+  const deadline = new Date(neededBy);
+
+  if (Number.isNaN(deadline.getTime())) {
+    return clamp(1 - deliveryDays / 30);
+  }
+
+  const now = new Date();
+  const daysUntilDeadline = Math.max(
+    0,
+    Math.ceil(
+      (deadline.getTime() - now.getTime()) / (1000 * 60 * 60 * 24),
+    ),
+  );
+
+  if (daysUntilDeadline === 0) {
+    return deliveryDays === 0 ? 1 : 0;
+  }
+
+  return clamp(1 - deliveryDays / daysUntilDeadline);
+}
+
+function calculateWeightedScore(
+  values: Array<{ value: number | null; weight: number }>,
+): number {
+  let weightedTotal = 0;
+  let availableWeight = 0;
+
+  for (const item of values) {
+    if (item.value === null || !Number.isFinite(item.value)) {
+      continue;
+    }
+
+    weightedTotal += clamp(item.value) * item.weight;
+    availableWeight += item.weight;
+  }
+
+  if (availableWeight === 0) {
+    return 0;
+  }
+
+  return clamp(weightedTotal / availableWeight);
+}
+
+function getPathway(mode: MatchingMode): string {
+  switch (mode) {
+    case "lowest_cost":
+      return "Cost-optimized matching";
+    case "lowest_carbon":
+      return "Carbon-optimized matching";
+    case "fastest_delivery":
+      return "Delivery-optimized matching";
+    case "balanced":
+    default:
+      return "Balanced matching";
+  }
+}
+
+function calculateModeScore(
+  candidate: Candidate,
+  mode: MatchingMode,
+): {
+  score: number;
+  breakdown: Record<string, number | null>;
+} {
+  const {
+    price_score,
+    quantity_score,
+    quality_score,
+    distance_score,
+    carbon_score,
+    delivery_score,
+    material_score,
+  } = candidate;
+
+  if (mode === "lowest_cost") {
+    const score = calculateWeightedScore([
+      { value: price_score, weight: 0.7 },
+      { value: distance_score, weight: 0.1 },
+      { value: quantity_score, weight: 0.1 },
+      { value: quality_score, weight: 0.1 },
+    ]);
+
+    return {
+      score,
+      breakdown: {
+        material: material_score,
+        price: price_score,
+        distance: distance_score,
+        quantity: quantity_score,
+        quality: quality_score,
+      },
+    };
+  }
+
+  if (mode === "lowest_carbon") {
+    const score = calculateWeightedScore([
+      { value: carbon_score, weight: 0.7 },
+      { value: distance_score, weight: 0.15 },
+      { value: quality_score, weight: 0.1 },
+      { value: quantity_score, weight: 0.05 },
+    ]);
+
+    return {
+      score,
+      breakdown: {
+        material: material_score,
+        carbon: carbon_score,
+        distance: distance_score,
+        quality: quality_score,
+        quantity: quantity_score,
+      },
+    };
+  }
+
+  if (mode === "fastest_delivery") {
+    const score = calculateWeightedScore([
+      { value: delivery_score, weight: 0.7 },
+      { value: distance_score, weight: 0.15 },
+      { value: quantity_score, weight: 0.1 },
+      { value: quality_score, weight: 0.05 },
+    ]);
+
+    return {
+      score,
+      breakdown: {
+        material: material_score,
+        delivery: delivery_score,
+        distance: distance_score,
+        quantity: quantity_score,
+        quality: quality_score,
+      },
+    };
+  }
+
+  const score = calculateWeightedScore([
+    { value: material_score, weight: 0.3 },
+    { value: quantity_score, weight: 0.15 },
+    { value: quality_score, weight: 0.15 },
+    { value: distance_score, weight: 0.15 },
+    { value: price_score, weight: 0.1 },
+    { value: carbon_score, weight: 0.1 },
+    { value: delivery_score, weight: 0.05 },
+  ]);
 
   return {
-    matchScore,
-    carbonSaved,
-
+    score,
     breakdown: {
-      material: Number(
-        materialScore.toFixed(3),
-      ),
-
-      quantity: Number(
-        quantityScore.toFixed(3),
-      ),
-
-      quality: Number(
-        qualityScore.toFixed(3),
-      ),
-
-      distance: Number(
-        distanceScore.toFixed(3),
-      ),
-
-      price:
-        priceScore === null
-          ? null
-          : Number(
-              priceScore.toFixed(3),
-            ),
-
-      carbon: Number(
-        carbonScore.toFixed(3),
-      ),
+      material: material_score,
+      quantity: quantity_score,
+      quality: quality_score,
+      distance: distance_score,
+      price: price_score,
+      carbon: carbon_score,
+      delivery: delivery_score,
     },
   };
 }
 
-// ======================================================
-// WHY THIS MATCH?
-// ======================================================
-
-function generateReasons(
-  requirement: Requirement,
-  listing: Listing,
-  distanceKm: number,
-): string[] {
-  const reasons: string[] = [];
-
-  // Material
-  reasons.push(
-    "Material compatible",
-  );
-
-  // Quantity
-  if (
-    listing.quantity >=
-    requirement.quantity_needed
-  ) {
-    reasons.push(
-      "Quantity sufficient",
-    );
-  } else {
-    reasons.push(
-      `Partial quantity match: ${listing.quantity} ${listing.unit} offered for ${requirement.quantity_needed} ${listing.unit} needed`,
-    );
+Deno.serve(async (request: Request): Promise<Response> => {
+  if (request.method === "OPTIONS") {
+    return new Response("ok", { headers: corsHeaders });
   }
 
-  // Grade
-  if (
-    gradeCompatible(
-      listing.grade,
-      requirement.min_grade,
-    )
-  ) {
-    reasons.push(
-      `Grade ${listing.grade} meets minimum Grade ${requirement.min_grade}`,
-    );
-  }
-
-  // Price
-  if (
-    requirement.max_budget !== null &&
-    listing.price !== null &&
-    listing.price <=
-      requirement.max_budget
-  ) {
-    reasons.push(
-      `Within budget: ₹${listing.price}/${listing.unit}`,
-    );
-  } else if (
-    listing.price === null
-  ) {
-    reasons.push(
-      "Price unavailable — score confidence reduced",
-    );
-  }
-
-  // Distance
-  reasons.push(
-    `${distanceKm.toFixed(1)} km estimated straight-line distance`,
-  );
-
-  // Pathway
-  if (listing.grade === "C") {
-    reasons.push(
-      "Grade C → recycling/material recovery pathway",
-    );
-  } else {
-    reasons.push(
-      "Grade A/B → direct reuse pathway",
-    );
-  }
-
-  return reasons;
-}
-
-// ======================================================
-// EDGE FUNCTION
-// ======================================================
-
-Deno.serve(async (req) => {
-  // ====================================================
-  // CORS PREFLIGHT
-  // ====================================================
-
-  if (req.method === "OPTIONS") {
-    return new Response(
-      "ok",
+  if (request.method !== "POST") {
+    return jsonResponse(
       {
-        headers: corsHeaders,
+        success: false,
+        error: "Only POST requests are allowed.",
       },
-    );
-  }
-
-  // ====================================================
-  // ONLY POST ALLOWED
-  // ====================================================
-
-  if (req.method !== "POST") {
-    return new Response(
-      JSON.stringify({
-        error:
-          "Method not allowed",
-      }),
-      {
-        status: 405,
-
-        headers: {
-          ...corsHeaders,
-          "Content-Type":
-            "application/json",
-        },
-      },
+      405,
     );
   }
 
   try {
-    // ==================================================
-    // SUPABASE ENVIRONMENT VARIABLES
-    // ==================================================
+    const authorizationHeader = request.headers.get("Authorization");
 
-    const supabaseUrl =
-      Deno.env.get(
-        "SUPABASE_URL",
-      );
-
-    const supabaseAnonKey =
-      Deno.env.get(
-        "SUPABASE_ANON_KEY",
-      );
-
-    if (
-      !supabaseUrl ||
-      !supabaseAnonKey
-    ) {
-      throw new Error(
-        "Supabase environment variables are missing",
+    if (!authorizationHeader) {
+      return jsonResponse(
+        {
+          success: false,
+          error: "Missing Authorization header.",
+        },
+        401,
       );
     }
 
-    // ==================================================
-    // AUTHORIZATION
-    // ==================================================
+    const token = authorizationHeader.replace("Bearer ", "").trim();
 
-    const authorization =
-      req.headers.get(
-        "Authorization",
-      );
-
-    if (!authorization) {
-      return new Response(
-        JSON.stringify({
-          error:
-            "Missing Authorization header",
-        }),
+    if (!token) {
+      return jsonResponse(
         {
-          status: 401,
-
-          headers: {
-            ...corsHeaders,
-            "Content-Type":
-              "application/json",
-          },
+          success: false,
+          error: "Invalid authorization token.",
         },
+        401,
       );
     }
-
-    // ==================================================
-    // CREATE SUPABASE CLIENT
-    // ==================================================
-
-    const supabase =
-      createClient(
-        supabaseUrl,
-        supabaseAnonKey,
-        {
-          global: {
-            headers: {
-              Authorization:
-                authorization,
-            },
-          },
-        },
-      );
-
-    // ==================================================
-    // GET CURRENT USER
-    // ==================================================
 
     const {
-      data: {
-        user,
-      },
+      data: { user },
       error: userError,
-    } =
-      await supabase.auth.getUser();
+    } = await supabase.auth.getUser(token);
 
-    if (
-      userError ||
-      !user
-    ) {
-      return new Response(
-        JSON.stringify({
-          error:
-            "Unauthorized",
-        }),
+    if (userError || !user) {
+      return jsonResponse(
         {
-          status: 401,
-
-          headers: {
-            ...corsHeaders,
-            "Content-Type":
-              "application/json",
-          },
+          success: false,
+          error: "Unauthorized user.",
         },
+        401,
       );
     }
 
-    // ==================================================
-    // READ REQUEST BODY
-    // ==================================================
+    const body = await request.json();
 
-    const body =
-      await req.json();
-
-    const requirementId =
-      body.requirement_id;
+    const requirementId = body?.requirement_id;
+    const requestedMode = body?.mode ?? "balanced";
 
     if (!requirementId) {
-      return new Response(
-        JSON.stringify({
-          error:
-            "requirement_id is required",
-        }),
+      return jsonResponse(
         {
-          status: 400,
-
-          headers: {
-            ...corsHeaders,
-            "Content-Type":
-              "application/json",
-          },
+          success: false,
+          error: "requirement_id is required.",
         },
+        400,
       );
     }
 
-    // ==================================================
-    // GET REQUIREMENT
-    // ==================================================
+    if (!VALID_MODES.includes(requestedMode)) {
+      return jsonResponse(
+        {
+          success: false,
+          error: `Invalid mode. Allowed modes: ${VALID_MODES.join(", ")}`,
+        },
+        400,
+      );
+    }
 
-    const {
-      data: requirement,
-      error:
-        requirementError,
-    } =
-      await supabase
+    const mode = requestedMode as MatchingMode;
+
+    const { data: requirement, error: requirementError } =
+      await adminSupabase
         .from("requirements")
         .select("*")
-        .eq(
-          "id",
-          requirementId,
-        )
-        .single();
+        .eq("id", requirementId)
+        .maybeSingle();
 
-    if (
-      requirementError ||
-      !requirement
-    ) {
-      return new Response(
-        JSON.stringify({
-          error:
-            "Requirement not found",
-        }),
+    if (requirementError) {
+      return jsonResponse(
         {
-          status: 404,
-
-          headers: {
-            ...corsHeaders,
-            "Content-Type":
-              "application/json",
-          },
+          success: false,
+          error: requirementError.message,
         },
+        500,
       );
     }
 
-    // ==================================================
-    // SECURITY
-    //
-    // Only the buyer who owns the requirement
-    // can request matching for it.
-    // ==================================================
-
-    if (
-      requirement.buyer_id !==
-      user.id
-    ) {
-      return new Response(
-        JSON.stringify({
-          error:
-            "You are not allowed to match this requirement",
-        }),
+    if (!requirement) {
+      return jsonResponse(
         {
-          status: 403,
-
-          headers: {
-            ...corsHeaders,
-            "Content-Type":
-              "application/json",
-          },
+          success: false,
+          error: "Requirement not found.",
         },
+        404,
       );
     }
 
-    // ==================================================
-    // REQUIREMENT MUST BE OPEN
-    // ==================================================
-
-    if (
-      requirement.status !==
-      "open"
-    ) {
-      return new Response(
-        JSON.stringify({
-          error:
-            "Only open requirements can be matched",
-        }),
+    if (requirement.user_id !== user.id) {
+      return jsonResponse(
         {
-          status: 400,
-
-          headers: {
-            ...corsHeaders,
-            "Content-Type":
-              "application/json",
-          },
+          success: false,
+          error: "You do not have permission to access this requirement.",
         },
+        403,
       );
     }
 
-    // ==================================================
-    // GET AVAILABLE LISTINGS
-    // ==================================================
+    const typedRequirement = requirement as Requirement;
 
-    const {
-      data: listings,
-      error:
-        listingsError,
-    } =
-      await supabase
-        .from("listings")
-        .select("*")
-        .eq(
-          "status",
-          "available",
-        );
+    const { data: listings, error: listingsError } = await adminSupabase
+      .from("listings")
+      .select("*")
+      .gt("quantity", 0);
 
     if (listingsError) {
-      throw listingsError;
+      return jsonResponse(
+        {
+          success: false,
+          error: listingsError.message,
+        },
+        500,
+      );
     }
 
-    // ==================================================
-    // HARD FILTER
-    // ==================================================
+    const compatibleCandidates: Candidate[] = [];
 
-    const compatibleListings =
-      (listings as Listing[])
-        .filter(
-          (listing) => {
-            // ------------------------------------------
-            // 1. MATERIAL
-            // ------------------------------------------
+    for (const rawListing of listings ?? []) {
+      const listing = rawListing as Listing;
 
-            const materialMatches =
-              listing.material_type
-                .trim()
-                .toLowerCase() ===
-              requirement.material_type
-                .trim()
-                .toLowerCase();
+      const materialMatches =
+        normalizeText(listing.material_type) ===
+        normalizeText(typedRequirement.material_type);
 
-            if (
-              !materialMatches
-            ) {
-              return false;
-            }
+      if (!materialMatches) {
+        continue;
+      }
 
-            // ------------------------------------------
-            // 2. QUANTITY MUST BE VALID
-            //
-            // Partial matches are allowed.
-            // We only reject zero/negative quantities.
-            // ------------------------------------------
+      if (
+        !Number.isFinite(typedRequirement.quantity) ||
+        typedRequirement.quantity <= 0 ||
+        !Number.isFinite(listing.quantity) ||
+        listing.quantity <= 0
+      ) {
+        continue;
+      }
 
-            if (
-              listing.quantity <=
-                0 ||
-              requirement.quantity_needed <=
-                0
-            ) {
-              return false;
-            }
+      if (
+        typedRequirement.max_budget !== null &&
+        typedRequirement.max_budget !== undefined &&
+        listing.price_per_unit !== null &&
+        listing.price_per_unit !== undefined &&
+        listing.price_per_unit > typedRequirement.max_budget
+      ) {
+        continue;
+      }
 
-            // ------------------------------------------
-            // 3. GRADE
-            // ------------------------------------------
+      if (
+        !isQualityCompatible(
+          typedRequirement.quality_grade,
+          listing.quality_grade,
+        )
+      ) {
+        continue;
+      }
 
-            if (
-              !gradeCompatible(
-                listing.grade,
-                requirement.min_grade,
-              )
-            ) {
-              return false;
-            }
+      const distanceKm = calculateDistanceKm(typedRequirement, listing);
 
-            // ------------------------------------------
-            // 4. PRICE / BUDGET
-            //
-            // Both are per-unit.
-            // ------------------------------------------
+      const maximumDistance =
+        typedRequirement.max_distance_km ?? 100;
 
-            if (
-              requirement.max_budget !==
-                null &&
-              listing.price !==
-                null &&
-              listing.price >
-                requirement.max_budget
-            ) {
-              return false;
-            }
+      if (
+        distanceKm !== null &&
+        Number.isFinite(maximumDistance) &&
+        distanceKm > maximumDistance
+      ) {
+        continue;
+      }
 
-            // ------------------------------------------
-            // 5. DISTANCE
-            // ------------------------------------------
+      if (listing.available_from && typedRequirement.needed_by) {
+        const availableDate = new Date(listing.available_from);
+        const neededByDate = new Date(typedRequirement.needed_by);
 
-            const distanceKm =
-              haversineDistance(
-                requirement.location_lat,
-                requirement.location_lng,
-                listing.location_lat,
-                listing.location_lng,
-              );
+        if (
+          !Number.isNaN(availableDate.getTime()) &&
+          !Number.isNaN(neededByDate.getTime()) &&
+          availableDate > neededByDate
+        ) {
+          continue;
+        }
+      }
 
-            if (
-              requirement.max_distance_km !==
-                null &&
-              requirement.max_distance_km >
-                0 &&
-              distanceKm >
-                requirement.max_distance_km
-            ) {
-              return false;
-            }
-
-            // ------------------------------------------
-            // 6. DATE
-            // ------------------------------------------
-
-            if (
-              !dateCompatible(
-                requirement,
-                listing,
-              )
-            ) {
-              return false;
-            }
-
-            // ------------------------------------------
-            // PASSED ALL FILTERS
-            // ------------------------------------------
-
-            return true;
-          },
-        );
-
-    // ==================================================
-    // SCORE EVERY COMPATIBLE LISTING
-    // ==================================================
-
-    const matches: MatchResult[] =
-      compatibleListings.map(
-        (listing) => {
-          // Distance
-          const distanceKm =
-            haversineDistance(
-              requirement.location_lat,
-              requirement.location_lng,
-              listing.location_lat,
-              listing.location_lng,
-            );
-
-          // Score
-          const score =
-            calculateMatchScore(
-              requirement,
-              listing,
-              distanceKm,
-            );
-
-          // Pathway
-          const pathway =
-            getPathway(
-              listing.grade,
-            );
-
-          // Reasons
-          const reasons =
-            generateReasons(
-              requirement,
-              listing,
-              distanceKm,
-            );
-
-          return {
-            listing_id:
-              listing.id,
-
-            match_score:
-              score.matchScore,
-
-            distance_km:
-              Number(
-                distanceKm.toFixed(2),
-              ),
-
-            carbon_saved_kg:
-              Number(
-                score.carbonSaved.toFixed(
-                  2,
-                ),
-              ),
-
-            pathway,
-
-            reasons,
-
-            score_breakdown: {
-              material:
-                score.breakdown
-                  .material,
-
-              quantity:
-                score.breakdown
-                  .quantity,
-
-              quality:
-                score.breakdown
-                  .quality,
-
-              distance:
-                score.breakdown
-                  .distance,
-
-              price:
-                score.breakdown
-                  .price,
-
-              carbon:
-                score.breakdown
-                  .carbon,
-            },
-          };
-        },
+      const quantityScore = calculateQuantityScore(
+        typedRequirement.quantity,
+        listing.quantity,
       );
 
-    // ==================================================
-    // RANK
-    //
-    // Highest score first
-    // ==================================================
+      const qualityScore = calculateQualityScore(
+        typedRequirement.quality_grade,
+        listing.quality_grade,
+      );
 
-    matches.sort(
-      (a, b) =>
-        b.match_score -
-        a.match_score,
-    );
+      const priceScore = calculatePriceScore(
+        listing.price_per_unit,
+        typedRequirement.max_budget,
+      );
 
-    // ==================================================
-    // RETURN RESULT
-    // ==================================================
+      const deliveryDays = calculateDeliveryDays(listing, distanceKm);
 
-    return new Response(
-      JSON.stringify({
-        success: true,
+      const deliveryScore = calculateDeliveryScore(
+        deliveryDays,
+        typedRequirement.needed_by,
+      );
 
-        requirement_id:
-          requirement.id,
+      const distanceScore =
+        distanceKm === null
+          ? null
+          : clamp(1 - distanceKm / Math.max(maximumDistance, 1));
 
-        total_matches:
-          matches.length,
+      const rawCarbonSaved =
+        listing.carbon_saved_kg !== null &&
+        listing.carbon_saved_kg !== undefined &&
+        Number.isFinite(listing.carbon_saved_kg)
+          ? Math.max(0, listing.carbon_saved_kg)
+          : null;
 
-        matches,
-      }),
-      {
-        status: 200,
+      const reasons: string[] = [
+        "Material type matches the requirement.",
+      ];
 
-        headers: {
-          ...corsHeaders,
-          "Content-Type":
-            "application/json",
-        },
-      },
-    );
+      if (listing.quantity >= typedRequirement.quantity) {
+        reasons.push("Listing quantity can satisfy the requested quantity.");
+      } else {
+        reasons.push("Listing provides only a partial quantity.");
+      }
+
+      if (qualityScore >= 1) {
+        reasons.push("Quality grade exactly matches.");
+      } else if (qualityScore > 0) {
+        reasons.push("Quality grade is compatible.");
+      }
+
+      if (priceScore !== null) {
+        reasons.push("Listing price is within the required budget.");
+      }
+
+      if (distanceKm !== null) {
+        reasons.push(
+          `Estimated distance is ${distanceKm.toFixed(2)} km.`,
+        );
+      }
+
+      if (deliveryDays !== null) {
+        reasons.push(
+          `Estimated delivery time is ${deliveryDays} day(s).`,
+        );
+      }
+
+      compatibleCandidates.push({
+        listing,
+        distance_km: distanceKm,
+        estimated_delivery_days: deliveryDays,
+        price_score: priceScore,
+        quantity_score: quantityScore,
+        quality_score: qualityScore,
+        distance_score: distanceScore,
+        carbon_score: null,
+        delivery_score: deliveryScore,
+        material_score: 1,
+        raw_price:
+          listing.price_per_unit !== null &&
+          listing.price_per_unit !== undefined
+            ? listing.price_per_unit
+            : null,
+        raw_carbon_saved: rawCarbonSaved,
+        raw_delivery_days: deliveryDays,
+        pathway: getPathway(mode),
+        reasons,
+      });
+    }
+
+    const prices = compatibleCandidates
+      .map((candidate) => candidate.raw_price)
+      .filter((value): value is number => value !== null);
+
+    const carbons = compatibleCandidates
+      .map((candidate) => candidate.raw_carbon_saved)
+      .filter((value): value is number => value !== null);
+
+    const deliveryDays = compatibleCandidates
+      .map((candidate) => candidate.raw_delivery_days)
+      .filter((value): value is number => value !== null);
+
+    const minPrice = prices.length > 0 ? Math.min(...prices) : 0;
+    const maxPrice = prices.length > 0 ? Math.max(...prices) : 0;
+
+    const minCarbon = carbons.length > 0 ? Math.min(...carbons) : 0;
+    const maxCarbon = carbons.length > 0 ? Math.max(...carbons) : 0;
+
+    const minDelivery =
+      deliveryDays.length > 0 ? Math.min(...deliveryDays) : 0;
+    const maxDelivery =
+      deliveryDays.length > 0 ? Math.max(...deliveryDays) : 0;
+
+    for (const candidate of compatibleCandidates) {
+      candidate.price_score =
+        candidate.raw_price === null
+          ? null
+          : normalizeMinMax(
+              candidate.raw_price,
+              minPrice,
+              maxPrice,
+              false,
+            );
+
+      candidate.carbon_score =
+        candidate.raw_carbon_saved === null
+          ? null
+          : normalizeMinMax(
+              candidate.raw_carbon_saved,
+              minCarbon,
+              maxCarbon,
+              true,
+            );
+
+      candidate.delivery_score =
+        candidate.raw_delivery_days === null
+          ? null
+          : normalizeMinMax(
+              candidate.raw_delivery_days,
+              minDelivery,
+              maxDelivery,
+              false,
+            );
+    }
+
+    const matches = compatibleCandidates
+      .map((candidate) => {
+        const modeResult = calculateModeScore(candidate, mode);
+
+        return {
+          listing_id: candidate.listing.id,
+          match_score: Number((modeResult.score * 100).toFixed(2)),
+          distance_km:
+            candidate.distance_km === null
+              ? null
+              : Number(candidate.distance_km.toFixed(2)),
+          carbon_saved_kg: candidate.raw_carbon_saved,
+          pathway: candidate.pathway,
+          reasons: candidate.reasons,
+          score_breakdown: modeResult.breakdown,
+          estimated_delivery_days: candidate.estimated_delivery_days,
+          price_per_unit: candidate.raw_price,
+        };
+      })
+      .sort((a, b) => b.match_score - a.match_score);
+
+    return jsonResponse({
+      success: true,
+      requirement_id: requirementId,
+      mode,
+      total_matches: matches.length,
+      matches,
+    });
   } catch (error) {
-    // ==================================================
-    // ERROR HANDLING
-    // ==================================================
+    console.error("Matching engine error:", error);
 
-    console.error(error);
-
-    return new Response(
-      JSON.stringify({
+    return jsonResponse(
+      {
+        success: false,
         error:
           error instanceof Error
             ? error.message
-            : "Internal server error",
-      }),
-      {
-        status: 500,
-
-        headers: {
-          ...corsHeaders,
-          "Content-Type":
-            "application/json",
-        },
+            : "Unexpected server error.",
       },
+      500,
     );
   }
 });
