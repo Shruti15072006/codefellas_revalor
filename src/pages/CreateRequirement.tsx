@@ -2,7 +2,6 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 
-
 const cityCoordinates = {
   Ahmedabad: {
     lat: 23.0225,
@@ -97,14 +96,15 @@ function CreateRequirement() {
       // ---------------------------------------------
 
       const requirementData = {
-        buyer_id: user.id,
+        user_id: user.id,
         material_type: materialType,
-        quantity_needed: Number(quantityNeeded),
-        min_grade: minGrade,
+        quantity: Number(quantityNeeded),
+        quality_grade:
+          minGrade === "A" ? "high" : minGrade === "B" ? "good" : "low",
         max_budget: maxBudget ? Number(maxBudget) : null,
         max_distance_km: Number(maxDistance),
-        location_lat: coordinates.lat,
-        location_lng: coordinates.lng,
+        latitude: coordinates.lat,
+        longitude: coordinates.lng,
         needed_by: neededBy || null,
       };
 

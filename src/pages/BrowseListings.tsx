@@ -7,10 +7,10 @@ type Listing = {
   material_type: string;
   quantity: number;
   unit: string;
-  grade: "A" | "B" | "C";
-  price: number;
-  location_lat: number;
-  location_lng: number;
+  quality_grade: "high" | "good" | "low";
+  price_per_unit: number;
+  latitude: number;
+  longitude: number;
   available_from: string | null;
   available_until: string | null;
   status: string;
@@ -40,20 +40,23 @@ function BrowseListings() {
 
     if (error) {
       console.error("Listings error:", error);
-      setMessage("Could not load listings.");
+      setMessage(`Could not load listings: ${error.message}`);
       setLoading(false);
       return;
     }
 
-    setListings(data || []);
+    setListings((data ?? []) as Listing[]);
     setLoading(false);
   }
 
   const filteredListings = listings.filter((listing) => {
     const materialMatches =
-      materialFilter === "all" || listing.material_type === materialFilter;
+      materialFilter === "all" ||
+      listing.material_type === materialFilter;
 
-    const gradeMatches = gradeFilter === "all" || listing.grade === gradeFilter;
+    const gradeMatches =
+      gradeFilter === "all" ||
+      listing.quality_grade === gradeFilter;
 
     return materialMatches && gradeMatches;
   });
@@ -93,9 +96,9 @@ function BrowseListings() {
             onChange={(e) => setGradeFilter(e.target.value)}
           >
             <option value="all">All Grades</option>
-            <option value="A">Grade A</option>
-            <option value="B">Grade B</option>
-            <option value="C">Grade C</option>
+            <option value="high">Grade A</option>
+            <option value="good">Grade B</option>
+            <option value="low">Grade C</option>
           </select>
         </div>
       </div>
@@ -116,7 +119,10 @@ function BrowseListings() {
           ) : (
             <div className="listing-grid">
               {filteredListings.map((listing) => (
-                <ListingCard key={listing.id} listing={listing} />
+                <ListingCard
+                  key={listing.id}
+                  listing={listing}
+                />
               ))}
             </div>
           )}

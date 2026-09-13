@@ -3,10 +3,10 @@ type Listing = {
   material_type: string;
   quantity: number;
   unit: string;
-  grade: "A" | "B" | "C";
-  price: number;
-  location_lat: number;
-  location_lng: number;
+  quality_grade: "high" | "good" | "low";
+  price_per_unit: number;
+  latitude: number;
+  longitude: number;
   available_from: string | null;
   available_until: string | null;
   status: string;
@@ -17,6 +17,12 @@ type ListingCardProps = {
 };
 
 function ListingCard({ listing }: ListingCardProps) {
+  const gradeLabel = {
+    high: "A",
+    good: "B",
+    low: "C",
+  };
+
   return (
     <div className="listing-card">
       <div className="listing-card-header">
@@ -26,26 +32,33 @@ function ListingCard({ listing }: ListingCardProps) {
           <span className="status-badge">{listing.status}</span>
         </div>
 
-        <div className="listing-grade">Grade {listing.grade}</div>
+        <div className="listing-grade">
+          Grade {gradeLabel[listing.quality_grade]}
+        </div>
       </div>
 
       <div className="listing-details">
         <div>
           <span>Quantity</span>
+
           <strong>
             {listing.quantity} {listing.unit}
           </strong>
         </div>
 
         <div>
-          <span>Price</span>
-          <strong>{listing.price === 0 ? "Free" : `₹${listing.price}`}</strong>
+          <span>Price / Unit</span>
+
+          <strong>
+            {listing.price_per_unit === 0
+              ? "Free"
+              : `₹${listing.price_per_unit}`}
+          </strong>
         </div>
       </div>
 
       <div className="listing-location">
-        Location coordinates: {listing.location_lat.toFixed(2)},{" "}
-        {listing.location_lng.toFixed(2)}
+        Location: {listing.latitude.toFixed(2)}, {listing.longitude.toFixed(2)}
       </div>
     </div>
   );

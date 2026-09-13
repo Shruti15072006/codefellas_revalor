@@ -10,11 +10,13 @@ type MatchMode =
   | "lowest_carbon"
   | "fastest_delivery";
 
+type QualityGrade = "high" | "good" | "low";
+
 type Requirement = {
   id: string;
   material_type: string;
-  quantity_needed: number;
-  min_grade: "A" | "B" | "C";
+  quantity: number;
+  quality_grade: QualityGrade;
   max_budget: number | null;
   max_distance_km: number | null;
 };
@@ -22,7 +24,7 @@ type Requirement = {
 type ApiMatch = {
   listing_id: string;
   match_score: number;
-  distance_km: number;
+  distance_km: number | null;
   carbon_saved_kg: number;
   pathway: "direct_reuse" | "recycling";
   reasons: string[];
@@ -41,25 +43,36 @@ type Listing = {
   material_type: string;
   quantity: number;
   unit: string;
-  grade: "A" | "B" | "C";
-  price: number;
+  quality_grade: QualityGrade;
+  price_per_unit: number;
 };
 
-function Matches() {
-  /* =========================================================
-     GET REQUIREMENT ID FROM URL
-  ========================================================= */
+/*
+ * MatchCard currently expects A/B/C grades.
+ * The database now uses high/good/low.
+ *
+ * high -> A
+ * good -> B
+ * low  -> C
+ */
+function convertQualityToGrade(quality: QualityGrade): "A" | "B" | "C" {
+  if (quality === "high") return "A";
+  if (quality === "good") return "B";
+  return "C";
+}
 
+function qualityLabel(quality: QualityGrade) {
+  if (quality === "high") return "High";
+  if (quality === "good") return "Good";
+  return "Low";
+}
+
+function Matches() {
   const { requirementId } = useParams<{
     requirementId: string;
   }>();
 
-  /* =========================================================
-     STATE
-  ========================================================= */
-
-  const [requirement, setRequirement] =
-    useState<Requirement | null>(null);
+  const [requirement, setRequirement] = useState<Requirement | null>(null);
 
   const [matches, setMatches] = useState<Match[]>([]);
 
@@ -67,15 +80,15 @@ function Matches() {
 
   const [loading, setLoading] = useState(true);
 
-  const [claimingId, setClaimingId] =
-    useState<string | null>(null);
+  const [claimingId, setClaimingId] = useState<string | null>(null);
 
-  const [mode, setMode] =
-    useState<MatchMode>("balanced");
+  const [mode, setMode] = useState<MatchMode>("balanced");
 
-  /* =========================================================
-     LOAD REQUIREMENT + MATCHES
-  ========================================================= */
+  /*
+   * =========================================================
+   * LOAD REQUIREMENT + MATCHES
+   * =========================================================
+   */
 
   useEffect(() => {
     async function loadMatches() {
@@ -84,21 +97,20 @@ function Matches() {
       setMatches([]);
 
       try {
-        /* --------------------------------------------------
-           1. CHECK REQUIREMENT ID
-        -------------------------------------------------- */
+        /*
+         * 1. CHECK REQUIREMENT ID
+         */
 
         if (!requirementId) {
           setMessage(
             "No requirement selected. Please create a requirement first.",
           );
-
           return;
         }
 
-        /* --------------------------------------------------
-           2. GET CURRENT SESSION
-        -------------------------------------------------- */
+        /*
+         * 2. GET CURRENT SESSION
+         */
 
         const {
           data: { session },
@@ -106,44 +118,38 @@ function Matches() {
         } = await supabase.auth.getSession();
 
         if (sessionError || !session) {
-          setMessage(
-            "Please log in to view your matches.",
-          );
-
+          setMessage("Please log in to view your matches.");
           return;
         }
 
-        /* --------------------------------------------------
-           3. GET REQUIREMENT
-        -------------------------------------------------- */
+        /*
+         * 3. GET REQUIREMENT
+         *
+         * NEW DATABASE COLUMNS:
+         * quantity_needed -> quantity
+         * min_grade       -> quality_grade
+         */
 
-        const {
-          data: requirementData,
-          error: requirementError,
-        } = await supabase
-          .from("requirements")
-          .select(
-            `
+        const { data: requirementData, error: requirementError } =
+          await supabase
+            .from("requirements")
+            .select(
+              `
               id,
               material_type,
-              quantity_needed,
-              min_grade,
+              quantity,
+              quality_grade,
               max_budget,
               max_distance_km
             `,
-          )
-          .eq("id", requirementId)
-          .single();
+            )
+            .eq("id", requirementId)
+            .single();
 
         if (requirementError) {
-          console.error(
-            "Requirement error:",
-            requirementError,
-          );
+          console.error("Requirement error:", requirementError);
 
-          setMessage(
-            `Could not load requirement: ${requirementError.message}`,
-          );
+          setMessage(`Could not load requirement: ${requirementError.message}`);
 
           return;
         }
@@ -153,19 +159,15 @@ function Matches() {
           return;
         }
 
-        const currentRequirement =
-          requirementData as Requirement;
+        const currentRequirement = requirementData as Requirement;
 
         setRequirement(currentRequirement);
 
-        /* --------------------------------------------------
-           4. CALL MATCHING ENGINE
-        -------------------------------------------------- */
+        /*
+         * 4. CALL MATCHING ENGINE
+         */
 
-        const {
-          data,
-          error,
-        } = await supabase.functions.invoke(
+        const { data, error } = await supabase.functions.invoke(
           "match-requirement",
           {
             body: {
@@ -180,81 +182,59 @@ function Matches() {
         );
 
         if (error) {
-          console.error(
-            "Matching engine error:",
-            error,
-          );
+          console.error("Matching engine error:", error);
 
           let errorDetails = error.message;
 
           try {
             if ("context" in error && error.context) {
-              const response =
-                error.context as Response;
+              const response = error.context as Response;
 
-              const body =
-                await response.text();
+              const body = await response.text();
 
-              console.error(
-                "Edge Function response:",
-                body,
-              );
+              console.error("Edge Function response:", body);
 
               try {
-                const parsed =
-                  JSON.parse(body);
+                const parsed = JSON.parse(body);
 
-                errorDetails =
-                  parsed.error || body;
+                errorDetails = parsed.error || body;
               } catch {
-                errorDetails =
-                  body || error.message;
+                errorDetails = body || error.message;
               }
             }
           } catch (debugError) {
-            console.error(
-              "Could not read Edge Function error:",
-              debugError,
-            );
+            console.error("Could not read Edge Function error:", debugError);
           }
 
-          setMessage(
-            `Could not load matches: ${errorDetails}`,
-          );
+          setMessage(`Could not load matches: ${errorDetails}`);
 
           return;
         }
 
-        console.log(
-          "Matching engine response:",
-          data,
-        );
+        console.log("Matching engine response:", data);
 
-        /* --------------------------------------------------
-           5. GET API MATCHES
-        -------------------------------------------------- */
+        /*
+         * 5. GET API MATCHES
+         */
 
-        const apiMatches: ApiMatch[] =
-          data?.matches ?? [];
+        const apiMatches: ApiMatch[] = data?.matches ?? [];
 
         if (apiMatches.length === 0) {
           setMatches([]);
           return;
         }
 
-        /* --------------------------------------------------
-           6. GET ACTUAL LISTING DATA
-        -------------------------------------------------- */
+        /*
+         * 6. GET ACTUAL LISTING DATA
+         *
+         * NEW DATABASE COLUMNS:
+         * grade -> quality_grade
+         * price -> price_per_unit
+         */
 
-        const listingIds =
-          apiMatches.map(
-            (match) => match.listing_id,
-          );
+        const listingIds = apiMatches.map((match) => match.listing_id);
 
-        const {
-          data: listingsData,
-          error: listingsError,
-        } = await supabase
+        const { data: listingsData, error: listingsError } = await supabase
           .from("listings")
           .select(
             `
@@ -262,17 +242,14 @@ function Matches() {
               material_type,
               quantity,
               unit,
-              grade,
-              price
+              quality_grade,
+              price_per_unit
             `,
           )
           .in("id", listingIds);
 
         if (listingsError) {
-          console.error(
-            "Listings error:",
-            listingsError,
-          );
+          console.error("Listings error:", listingsError);
 
           setMessage(
             `Could not load listing details: ${listingsError.message}`,
@@ -281,87 +258,61 @@ function Matches() {
           return;
         }
 
-        const listings: Listing[] =
-          (listingsData ?? []) as Listing[];
+        const listings: Listing[] = (listingsData ?? []) as Listing[];
 
-        /* --------------------------------------------------
-           7. COMBINE MATCH + LISTING DATA
-        -------------------------------------------------- */
+        /*
+         * 7. COMBINE MATCH + LISTING DATA
+         */
 
-        const frontendMatches: Match[] =
-          apiMatches
-            .map((match) => {
-              const listing =
-                listings.find(
-                  (item) =>
-                    item.id ===
-                    match.listing_id,
-                );
-
-              if (!listing) {
-                return null;
-              }
-
-              return {
-                listing_id:
-                  match.listing_id,
-
-                match_score:
-                  match.match_score,
-
-                distance_km:
-                  match.distance_km,
-
-                carbon_saved_kg:
-                  match.carbon_saved_kg,
-
-                pathway:
-                  match.pathway,
-
-                reasons:
-                  match.reasons,
-
-                score_breakdown:
-                  match.score_breakdown,
-
-                materialType:
-                  listing.material_type,
-
-                quantity:
-                  listing.quantity,
-
-                unit:
-                  listing.unit,
-
-                grade:
-                  listing.grade,
-
-                price:
-                  listing.price,
-              };
-            })
-            .filter(
-              (
-                match,
-              ): match is Match =>
-                match !== null,
+        const frontendMatches: Match[] = apiMatches
+          .map((match) => {
+            const listing = listings.find(
+              (item) => item.id === match.listing_id,
             );
 
-        console.log(
-          "Frontend matches:",
-          frontendMatches,
-        );
+            if (!listing) {
+              return null;
+            }
+
+            return {
+              listing_id: match.listing_id,
+
+              match_score: match.match_score,
+
+              distance_km: match.distance_km ?? 0,
+
+              carbon_saved_kg: match.carbon_saved_kg,
+
+              pathway: match.pathway,
+
+              reasons: match.reasons,
+
+              score_breakdown: match.score_breakdown,
+
+              materialType: listing.material_type,
+
+              quantity: listing.quantity,
+
+              unit: listing.unit,
+
+              /*
+               * MatchCard still expects A/B/C.
+               * Convert the new database values.
+               */
+              grade: convertQualityToGrade(listing.quality_grade),
+
+              price: listing.price_per_unit,
+            };
+          })
+          .filter((match): match is Match => match !== null);
+
+        console.log("Frontend matches:", frontendMatches);
 
         setMatches(frontendMatches);
       } catch (error) {
-        console.error(
-          "Matches error:",
-          error,
-        );
+        console.error("Matches error:", error);
 
-        setMessage(
-          "Something went wrong while loading matches.",
-        );
+        setMessage("Something went wrong while loading matches.");
       } finally {
         setLoading(false);
       }
@@ -370,18 +321,20 @@ function Matches() {
     loadMatches();
   }, [mode, requirementId]);
 
-  /* =========================================================
-     CLAIM MATCH
-  ========================================================= */
+  /*
+   * =========================================================
+   * CLAIM MATCH
+   * =========================================================
+   */
 
   async function handleClaim(match: Match) {
     setMessage("");
     setClaimingId(match.listing_id);
 
     try {
-      /* --------------------------------------------------
-         1. GET LOGGED-IN BUYER
-      -------------------------------------------------- */
+      /*
+       * 1. GET LOGGED-IN BUYER
+       */
 
       const {
         data: { user },
@@ -389,43 +342,36 @@ function Matches() {
       } = await supabase.auth.getUser();
 
       if (userError || !user) {
-        setMessage(
-          "Please log in before claiming a match.",
-        );
+        setMessage("Please log in before claiming a match.");
 
         return;
       }
 
-      /* --------------------------------------------------
-         2. CHECK REQUIREMENT
-      -------------------------------------------------- */
+      /*
+       * 2. CHECK REQUIREMENT
+       */
 
       if (!requirement) {
-        setMessage(
-          "Requirement information is missing.",
-        );
+        setMessage("Requirement information is missing.");
 
         return;
       }
 
-      /* --------------------------------------------------
-         3. GET SELLER FROM LISTING
-      -------------------------------------------------- */
+      /*
+       * 3. GET USER FROM LISTING
+       *
+       * NEW DATABASE COLUMN:
+       * seller_id -> user_id
+       */
 
-      const {
-        data: listing,
-        error: listingError,
-      } = await supabase
+      const { data: listing, error: listingError } = await supabase
         .from("listings")
-        .select("seller_id")
+        .select("user_id")
         .eq("id", match.listing_id)
         .single();
 
       if (listingError) {
-        console.error(
-          "Listing error:",
-          listingError,
-        );
+        console.error("Listing error:", listingError);
 
         setMessage(
           `Could not find the seller for this listing: ${listingError.message}`,
@@ -434,55 +380,41 @@ function Matches() {
         return;
       }
 
-      if (!listing?.seller_id) {
-        setMessage(
-          "This listing does not have a valid seller.",
-        );
+      if (!listing?.user_id) {
+        setMessage("This listing does not have a valid seller.");
 
         return;
       }
 
-      /* --------------------------------------------------
-         4. PREVENT SELF-CLAIM
-      -------------------------------------------------- */
+      /*
+       * 4. PREVENT SELF-CLAIM
+       */
 
-      if (listing.seller_id === user.id) {
-        setMessage(
-          "You cannot claim your own listing.",
-        );
+      if (listing.user_id === user.id) {
+        setMessage("You cannot claim your own listing.");
 
         return;
       }
 
-      /* --------------------------------------------------
-         5. CHECK EXISTING TRANSACTION
-      -------------------------------------------------- */
+      /*
+       * 5. CHECK EXISTING TRANSACTION
+       *
+       * NOTE:
+       * We are keeping buyer_id here because
+       * the message from Vedanshi only changed
+       * listings and requirements ownership fields.
+       */
 
-      const {
-        data: existingTransaction,
-        error: existingError,
-      } = await supabase
+      const { data: existingTransaction, error: existingError } = await supabase
         .from("transactions")
         .select("id, status")
-        .eq(
-          "listing_id",
-          match.listing_id,
-        )
-        .eq(
-          "requirement_id",
-          requirement.id,
-        )
-        .eq(
-          "buyer_id",
-          user.id,
-        )
+        .eq("listing_id", match.listing_id)
+        .eq("requirement_id", requirement.id)
+        .eq("buyer_id", user.id)
         .maybeSingle();
 
       if (existingError) {
-        console.error(
-          "Existing transaction check error:",
-          existingError,
-        );
+        console.error("Existing transaction check error:", existingError);
 
         setMessage(
           `Could not check existing transaction: ${existingError.message}`,
@@ -499,60 +431,44 @@ function Matches() {
         return;
       }
 
-      /* --------------------------------------------------
-         6. CREATE TRANSACTION
-      -------------------------------------------------- */
+      /*
+       * 6. CREATE TRANSACTION
+       */
 
       const transactionData = {
-        listing_id:
-          match.listing_id,
+        listing_id: match.listing_id,
 
-        requirement_id:
-          requirement.id,
+        requirement_id: requirement.id,
 
-        seller_id:
-          listing.seller_id,
+        /*
+         * transactions table may still use seller_id.
+         * The listing itself now uses user_id.
+         */
+        seller_id: listing.user_id,
 
-        buyer_id:
-          user.id,
+        buyer_id: user.id,
 
-        match_score:
-          match.match_score,
+        match_score: match.match_score,
 
-        status:
-          "pending",
+        status: "pending",
 
-        estimated_distance_km:
-          match.distance_km,
+        estimated_distance_km: match.distance_km,
 
-        estimated_transport_cost:
-          null,
+        estimated_transport_cost: null,
 
-        estimated_transport_emissions_kg:
-          null,
+        estimated_transport_emissions_kg: null,
 
-        estimated_co2_saved_kg:
-          match.carbon_saved_kg,
+        estimated_co2_saved_kg: match.carbon_saved_kg,
       };
 
-      console.log(
-        "Creating transaction:",
-        transactionData,
-      );
+      console.log("Creating transaction:", transactionData);
 
-      const {
-        error: transactionError,
-      } = await supabase
+      const { error: transactionError } = await supabase
         .from("transactions")
-        .insert(
-          transactionData,
-        );
+        .insert(transactionData);
 
       if (transactionError) {
-        console.error(
-          "Transaction creation error:",
-          transactionError,
-        );
+        console.error("Transaction creation error:", transactionError);
 
         setMessage(
           `Could not create transaction request: ${transactionError.message}`,
@@ -561,322 +477,201 @@ function Matches() {
         return;
       }
 
-      /* --------------------------------------------------
-         7. SUCCESS
-      -------------------------------------------------- */
+      /*
+       * 7. SUCCESS
+       */
 
       setMessage(
         "Match claimed successfully! Transaction request sent to the seller.",
       );
     } catch (error) {
-      console.error(
-        "Claim error:",
-        error,
-      );
+      console.error("Claim error:", error);
 
-      setMessage(
-        "Something went wrong while claiming the match.",
-      );
+      setMessage("Something went wrong while claiming the match.");
     } finally {
       setClaimingId(null);
     }
   }
 
-  /* =========================================================
-     UI
-  ========================================================= */
+  /*
+   * =========================================================
+   * UI
+   * =========================================================
+   */
 
   return (
     <div className="matches-page">
-
-      {/* =================================================
-          PAGE HEADER
-      ================================================= */}
+      {/* PAGE HEADER */}
 
       <div className="page-header">
-        <p className="eyebrow">
-          INTELLIGENT MATCHING
-        </p>
+        <p className="eyebrow">INTELLIGENT MATCHING</p>
 
         <h1>Your Matches</h1>
 
         <p className="page-subtitle">
-          Find the best materials for your
-          requirements.
+          Find the best materials for your requirements.
         </p>
       </div>
 
-      {/* =================================================
-          MESSAGE
-      ================================================= */}
+      {/* MESSAGE */}
 
-      {message && (
-        <div className="form-message">
-          {message}
-        </div>
-      )}
+      {message && <div className="form-message">{message}</div>}
 
-      {/* =================================================
-          LOADING
-      ================================================= */}
+      {/* LOADING */}
 
       {loading ? (
         <div className="matches-loading">
           <div className="loading-spinner" />
 
-          <p>
-            Finding the best matches...
-          </p>
+          <p>Finding the best matches...</p>
         </div>
       ) : requirement ? (
         <>
-          {/* =============================================
-              REQUIREMENT SUMMARY
-          ============================================= */}
+          {/* REQUIREMENT SUMMARY */}
 
           <section className="requirement-summary">
-
             <div className="requirement-item">
-              <span>
-                Looking for
-              </span>
+              <span>Looking for</span>
 
               <strong>
-                {requirement.quantity_needed} kg{" "}
-                {requirement.material_type}
+                {requirement.quantity} kg {requirement.material_type}
               </strong>
             </div>
 
             <div className="requirement-item">
-              <span>
-                Minimum Grade
-              </span>
+              <span>Minimum Quality</span>
 
-              <strong>
-                Grade {requirement.min_grade}
-              </strong>
+              <strong>{qualityLabel(requirement.quality_grade)}</strong>
             </div>
 
             <div className="requirement-item">
-              <span>
-                Maximum Distance
-              </span>
+              <span>Maximum Distance</span>
 
               <strong>
-                {requirement.max_distance_km !==
-                null
+                {requirement.max_distance_km !== null
                   ? `${requirement.max_distance_km} km`
                   : "No limit"}
               </strong>
             </div>
 
-            {requirement.max_budget !==
-              null && (
+            {requirement.max_budget !== null && (
               <div className="requirement-item">
-                <span>
-                  Maximum Budget
-                </span>
+                <span>Maximum Budget</span>
 
-                <strong>
-                  ₹{requirement.max_budget}
-                </strong>
+                <strong>₹{requirement.max_budget}</strong>
               </div>
             )}
-
           </section>
 
-          {/* =============================================
-              MATCHING PREFERENCE
-          ============================================= */}
+          {/* MATCHING PREFERENCE */}
 
           <section className="matching-mode-section">
-
             <div className="matching-mode-header">
               <div>
-                <p className="eyebrow">
-                  MATCHING ENGINE
-                </p>
+                <p className="eyebrow">MATCHING ENGINE</p>
 
-                <h2>
-                  Matching Preference
-                </h2>
+                <h2>Matching Preference</h2>
 
                 <p>
-                  Choose how you want the
-                  matching engine to rank
-                  materials.
+                  Choose how you want the matching engine to rank materials.
                 </p>
               </div>
             </div>
 
             <div className="matching-mode-options">
-
               <button
                 type="button"
                 className={
-                  mode === "balanced"
-                    ? "mode-option active"
-                    : "mode-option"
+                  mode === "balanced" ? "mode-option active" : "mode-option"
                 }
-                onClick={() =>
-                  setMode("balanced")
-                }
+                onClick={() => setMode("balanced")}
               >
-                <strong>
-                  Balanced
-                </strong>
+                <strong>Balanced</strong>
 
-                <span>
-                  Best overall match
-                </span>
+                <span>Best overall match</span>
               </button>
 
               <button
                 type="button"
                 className={
-                  mode === "lowest_cost"
-                    ? "mode-option active"
-                    : "mode-option"
+                  mode === "lowest_cost" ? "mode-option active" : "mode-option"
                 }
-                onClick={() =>
-                  setMode(
-                    "lowest_cost",
-                  )
-                }
+                onClick={() => setMode("lowest_cost")}
               >
-                <strong>
-                  Lowest Cost
-                </strong>
+                <strong>Lowest Cost</strong>
 
-                <span>
-                  Prioritize affordable
-                  materials
-                </span>
+                <span>Prioritize affordable materials</span>
               </button>
 
               <button
                 type="button"
                 className={
-                  mode ===
-                  "lowest_carbon"
+                  mode === "lowest_carbon"
                     ? "mode-option active"
                     : "mode-option"
                 }
-                onClick={() =>
-                  setMode(
-                    "lowest_carbon",
-                  )
-                }
+                onClick={() => setMode("lowest_carbon")}
               >
-                <strong>
-                  Lowest Carbon
-                </strong>
+                <strong>Lowest Carbon</strong>
 
-                <span>
-                  Prioritize carbon
-                  savings
-                </span>
+                <span>Prioritize carbon savings</span>
               </button>
 
               <button
                 type="button"
                 className={
-                  mode ===
-                  "fastest_delivery"
+                  mode === "fastest_delivery"
                     ? "mode-option active"
                     : "mode-option"
                 }
-                onClick={() =>
-                  setMode(
-                    "fastest_delivery",
-                  )
-                }
+                onClick={() => setMode("fastest_delivery")}
               >
-                <strong>
-                  Fastest Delivery
-                </strong>
+                <strong>Fastest Delivery</strong>
 
-                <span>
-                  Prioritize nearby
-                  materials
-                </span>
+                <span>Prioritize nearby materials</span>
               </button>
-
             </div>
           </section>
         </>
       ) : null}
 
-      {/* =================================================
-          MATCH RESULTS
-      ================================================= */}
+      {/* MATCH RESULTS */}
 
       {!loading && requirement && (
         <section className="matches-results">
-
           <div className="matches-header">
-
             <div>
-              <p className="eyebrow">
-                RECOMMENDED MATERIALS
-              </p>
+              <p className="eyebrow">RECOMMENDED MATERIALS</p>
 
-              <h2>
-                Best Matches
-              </h2>
+              <h2>Best Matches</h2>
 
               <p>
                 {matches.length} potential{" "}
-                {matches.length === 1
-                  ? "match"
-                  : "matches"}{" "}
-                found
+                {matches.length === 1 ? "match" : "matches"} found
               </p>
             </div>
-
           </div>
 
           {matches.length === 0 ? (
             <div className="empty-state">
+              <h2>No matches found</h2>
 
-              <h2>
-                No matches found
-              </h2>
-
-              <p>
-                No compatible materials
-                were found for this
-                requirement.
-              </p>
-
+              <p>No compatible materials were found for this requirement.</p>
             </div>
           ) : (
             <div className="matches-list">
-
-              {matches.map(
-                (match) => (
-                  <MatchCard
-                    key={
-                      match.listing_id
-                    }
-                    match={match}
-                    onClaim={
-                      handleClaim
-                    }
-                    claiming={
-                      claimingId ===
-                      match.listing_id
-                    }
-                  />
-                ),
-              )}
-
+              {matches.map((match) => (
+                <MatchCard
+                  key={match.listing_id}
+                  match={match}
+                  onClaim={handleClaim}
+                  claiming={claimingId === match.listing_id}
+                />
+              ))}
             </div>
           )}
-
         </section>
       )}
-
     </div>
   );
 }

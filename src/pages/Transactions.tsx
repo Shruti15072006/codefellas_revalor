@@ -18,8 +18,8 @@ type Transaction = {
     material_type: string;
     quantity: number;
     unit: string;
-    grade: "A" | "B" | "C";
-    price: number;
+    quality_grade: "high" | "good" | "low";
+    price_per_unit: number;
   } | null;
 };
 
@@ -33,7 +33,10 @@ function Transactions() {
       setLoading(true);
       setMessage("");
 
-      // Get currently logged-in user
+      // ---------------------------------------------
+      // 1. GET LOGGED-IN USER
+      // ---------------------------------------------
+
       const {
         data: { user },
         error: userError,
@@ -52,31 +55,38 @@ function Transactions() {
         return;
       }
 
-      // Get transactions + related listing information
+      // ---------------------------------------------
+      // 2. GET TRANSACTIONS + LISTING INFORMATION
+      // ---------------------------------------------
+
       const { data, error } = await supabase
         .from("transactions")
         .select(
           `
-    id,
-    listing_id,
-    requirement_id,
-    match_score,
-    status,
-    estimated_distance_km,
-    estimated_transport_cost,
-    estimated_transport_emissions_kg,
-    estimated_co2_saved_kg,
-    listings (
-      material_type,
-      quantity,
-      unit,
-      grade,
-      price
-    )
-  `,
+          id,
+          listing_id,
+          requirement_id,
+          match_score,
+          status,
+          estimated_distance_km,
+          estimated_transport_cost,
+          estimated_transport_emissions_kg,
+          estimated_co2_saved_kg,
+          listings (
+            material_type,
+            quantity,
+            unit,
+            quality_grade,
+            price_per_unit
+          )
+        `,
         )
         .eq("buyer_id", user.id)
         .order("created_at", { ascending: false });
+
+      // ---------------------------------------------
+      // 3. CHECK ERROR
+      // ---------------------------------------------
 
       if (error) {
         console.error("Transaction error:", error);
@@ -85,12 +95,18 @@ function Transactions() {
         return;
       }
 
+      // ---------------------------------------------
+      // 4. FORMAT DATA
+      // ---------------------------------------------
+
       const formattedTransactions: Transaction[] = (data ?? []).map((item) => ({
         id: item.id,
         listing_id: item.listing_id,
         requirement_id: item.requirement_id,
         match_score: item.match_score,
+
         status: item.status as "pending" | "pickup_assigned" | "completed",
+
         estimated_distance_km: item.estimated_distance_km,
         estimated_transport_cost: item.estimated_transport_cost,
         estimated_transport_emissions_kg: item.estimated_transport_emissions_kg,
@@ -107,6 +123,10 @@ function Transactions() {
 
     loadTransactions();
   }, []);
+
+  // ---------------------------------------------
+  // UI
+  // ---------------------------------------------
 
   return (
     <div className="transactions-page">
@@ -134,7 +154,10 @@ function Transactions() {
         <div className="transactions-list">
           {transactions.map((transaction) => (
             <div className="transaction-card" key={transaction.id}>
-              {/* Transaction Header */}
+              {/* ---------------------------------------------
+                  TRANSACTION HEADER
+              --------------------------------------------- */}
+
               <div className="transaction-header">
                 <div>
                   <p className="listing-material">
@@ -150,17 +173,28 @@ function Transactions() {
                 <strong>{transaction.match_score ?? 0}% Match</strong>
               </div>
 
-              {/* Transaction Details */}
+              {/* ---------------------------------------------
+                  TRANSACTION DETAILS
+              --------------------------------------------- */}
+
               <div className="transaction-details">
+                {/* QUALITY GRADE */}
+
                 <div>
                   <span>Grade</span>
 
                   <strong>
-                    {transaction.listings?.grade
-                      ? `Grade ${transaction.listings.grade}`
+                    {transaction.listings?.quality_grade
+                      ? transaction.listings.quality_grade === "high"
+                        ? "Grade A"
+                        : transaction.listings.quality_grade === "good"
+                          ? "Grade B"
+                          : "Grade C"
                       : "N/A"}
                   </strong>
                 </div>
+
+                {/* DISTANCE */}
 
                 <div>
                   <span>Distance</span>
@@ -172,6 +206,8 @@ function Transactions() {
                   </strong>
                 </div>
 
+                {/* CO2 SAVED */}
+
                 <div>
                   <span>CO₂ Saved</span>
 
@@ -182,17 +218,21 @@ function Transactions() {
                   </strong>
                 </div>
 
+                {/* PRICE */}
+
                 <div>
                   <span>Price</span>
 
                   <strong>
-                    {transaction.listings?.price === 0
+                    {transaction.listings?.price_per_unit === 0
                       ? "Free"
-                      : transaction.listings?.price != null
-                        ? `₹${transaction.listings.price}/kg`
+                      : transaction.listings?.price_per_unit != null
+                        ? `₹${transaction.listings.price_per_unit}/kg`
                         : "N/A"}
                   </strong>
                 </div>
+
+                {/* TRANSPORT COST */}
 
                 <div>
                   <span>Transport Cost</span>
@@ -203,6 +243,8 @@ function Transactions() {
                       : "N/A"}
                   </strong>
                 </div>
+
+                {/* STATUS */}
 
                 <div>
                   <span>Status</span>
@@ -217,7 +259,10 @@ function Transactions() {
                 </div>
               </div>
 
-              {/* Transaction ID - useful for debugging/demo */}
+              {/* ---------------------------------------------
+                  TRANSACTION ID
+              --------------------------------------------- */}
+
               <div className="transaction-id">
                 Transaction ID: {transaction.id}
               </div>

@@ -37,6 +37,10 @@ function CreateListing() {
 
     setMessage("");
 
+    // ---------------------------------------------
+    // VALIDATION
+    // ---------------------------------------------
+
     if (!quantity || Number(quantity) <= 0) {
       setMessage("Please enter a valid quantity.");
       return;
@@ -45,15 +49,23 @@ function CreateListing() {
     const coordinates =
       cityCoordinates[location as keyof typeof cityCoordinates];
 
+    if (!coordinates) {
+      setMessage("Please select a valid location.");
+      return;
+    }
+
     try {
-      // Get currently logged-in user
+      // ---------------------------------------------
+      // 1. GET LOGGED-IN USER
+      // ---------------------------------------------
+
       const {
         data: { user },
         error: userError,
       } = await supabase.auth.getUser();
 
       if (userError) {
-        console.error(userError);
+        console.error("User error:", userError);
         setMessage("Could not get user information.");
         return;
       }
@@ -63,16 +75,31 @@ function CreateListing() {
         return;
       }
 
-      // Data matching Vedanshi's listings table
+      // ---------------------------------------------
+      // 2. MAP FRONTEND GRADE TO DATABASE VALUE
+      // ---------------------------------------------
+
+      const gradeMapping = {
+        A: "high",
+        B: "good",
+        C: "low",
+      };
+
+      const qualityGrade = gradeMapping[grade as keyof typeof gradeMapping];
+
+      // ---------------------------------------------
+      // 3. CREATE LISTING
+      // ---------------------------------------------
+
       const listingData = {
-        seller_id: user.id,
+        user_id: user.id,
         material_type: materialType,
         quantity: Number(quantity),
         unit,
-        grade,
-        price: Number(price) || 0,
-        location_lat: coordinates.lat,
-        location_lng: coordinates.lng,
+        quality_grade: qualityGrade,
+        price_per_unit: Number(price) || 0,
+        latitude: coordinates.lat,
+        longitude: coordinates.lng,
         available_from: availableFrom || null,
         available_until: availableUntil || null,
       };
@@ -81,11 +108,19 @@ function CreateListing() {
 
       const { error } = await supabase.from("listings").insert(listingData);
 
+      // ---------------------------------------------
+      // 4. CHECK INSERT ERROR
+      // ---------------------------------------------
+
       if (error) {
         console.error("Insert error:", error);
         setMessage(`Failed to publish listing: ${error.message}`);
         return;
       }
+
+      // ---------------------------------------------
+      // 5. SUCCESS
+      // ---------------------------------------------
 
       setMessage("Listing published successfully!");
 
@@ -95,7 +130,7 @@ function CreateListing() {
       setAvailableFrom("");
       setAvailableUntil("");
     } catch (error) {
-      console.error(error);
+      console.error("Create listing error:", error);
       setMessage("Something went wrong while publishing the listing.");
     }
   }
@@ -113,7 +148,7 @@ function CreateListing() {
       </div>
 
       <form className="listing-form" onSubmit={handleSubmit}>
-        {/* Material */}
+        {/* MATERIAL */}
 
         <div className="form-group">
           <label>Material Type</label>
@@ -128,7 +163,7 @@ function CreateListing() {
           </select>
         </div>
 
-        {/* Quantity + Unit */}
+        {/* QUANTITY + UNIT */}
 
         <div className="form-row">
           <div className="form-group">
@@ -153,7 +188,7 @@ function CreateListing() {
           </div>
         </div>
 
-        {/* Grade */}
+        {/* GRADE */}
 
         <div className="form-group">
           <label>Material Grade</label>
@@ -172,7 +207,7 @@ function CreateListing() {
           </div>
         </div>
 
-        {/* Price */}
+        {/* PRICE */}
 
         <div className="form-group">
           <label>Price</label>
@@ -192,7 +227,7 @@ function CreateListing() {
           <small>Enter 0 if the material is being given away.</small>
         </div>
 
-        {/* Location */}
+        {/* LOCATION */}
 
         <div className="form-group">
           <label>Location</label>
@@ -212,7 +247,7 @@ function CreateListing() {
           </small>
         </div>
 
-        {/* Dates */}
+        {/* DATES */}
 
         <div className="form-row">
           <div className="form-group">
@@ -236,11 +271,11 @@ function CreateListing() {
           </div>
         </div>
 
-        {/* Message */}
+        {/* MESSAGE */}
 
         {message && <div className="form-message">{message}</div>}
 
-        {/* Buttons */}
+        {/* BUTTONS */}
 
         <div className="form-actions">
           <button

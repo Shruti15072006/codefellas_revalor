@@ -95,7 +95,7 @@ function Signup() {
   return (
     <div className="signup-page">
       <div className="page-header">
-        <p className="eyebrow">RECRATE</p>
+        <p className="eyebrow">Revalor</p>
 
         <h1>Create Account</h1>
 
